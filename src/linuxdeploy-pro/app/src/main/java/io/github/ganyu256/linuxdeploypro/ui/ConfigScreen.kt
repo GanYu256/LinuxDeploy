@@ -151,6 +151,11 @@ fun ConfigScreen(
         )
     }
 
+    // 初始化系统：sysv（默认，启动时执行 /etc/rcN.d 的 S 脚本）/ run-parts（自定义脚本目录）
+    var initSystem by rememberSaveable(initial?.init) { mutableStateOf(initial?.init ?: "sysv") }
+    val initLevelState = rememberTextFieldState(initial?.initLevel ?: "3")
+    val initPathState = rememberTextFieldState(initial?.initPath ?: "/etc/rc.d")
+
     // 安卓文件挂载：开关 + 挂载行列表（每行“源:目标”两个输入框，行内编辑）
     val mountRows = remember {
         mutableStateListOf<MountRow>().apply {
@@ -193,6 +198,8 @@ fun ConfigScreen(
         }
         if (base.isEmpty()) base.add("core")
         if (sshEnabled && "extra/ssh" !in base) base.add("extra/ssh")
+        // 初始化系统启用时保证 INCLUDE 含 init 组件（sysv/run-parts 均依赖它生效）
+        if ("init" !in base) base.add("init")
         return base.joinToString(" ")
     }
 
@@ -420,6 +427,44 @@ fun ConfigScreen(
                 }
             }
 
+            // ===== 初始化系统 =====
+            GroupTitle("初始化系统")
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.defaultColors(
+                    color = MiuixTheme.colorScheme.background,
+                    contentColor = MiuixTheme.colorScheme.onSurface,
+                ),
+            ) {
+                Column {
+                    OverlayDropdownPreference(
+                        title = "初始化系统",
+                        summary = when (initSystem) {
+                            "run-parts" -> "run-parts（自定义脚本目录）"
+                            else -> "SysV（/etc/rcN.d，Debian 默认）"
+                        },
+                        items = listOf("SysV（/etc/rcN.d）", "run-parts（自定义目录）"),
+                        selectedIndex = if (initSystem == "run-parts") 1 else 0,
+                        onSelectedIndexChange = { initSystem = if (it == 1) "run-parts" else "sysv" },
+                    )
+                    if (initSystem == "sysv") {
+                        HorizontalDivider()
+                        LabeledTextField(
+                            label = "运行级别",
+                            state = initLevelState,
+                            hint = "默认 3：启动时按序执行 /etc/rc3.d/ 的 S 脚本，停止时执行 rc6.d 的 K 脚本",
+                        )
+                    } else {
+                        HorizontalDivider()
+                        LabeledTextField(
+                            label = "脚本目录（容器内路径）",
+                            state = initPathState,
+                            hint = "目录内脚本按顺序执行 start；停止时逆序执行 stop",
+                        )
+                    }
+                }
+            }
+
             // ===== 图形配置（占位，暂不实现） =====
             GroupTitle("图形配置")
             Card(
@@ -494,6 +539,9 @@ fun ConfigScreen(
                             sshPort = sshPortState.text.toString().trim().ifBlank { "22" },
                             password = passwordState.text.toString().ifBlank { "changeme" },
                             components = buildComponents(),
+                            init = initSystem,
+                            initLevel = initLevelState.text.toString().trim().ifBlank { "3" },
+                            initPath = initPathState.text.toString().trim().ifBlank { "/etc/rc.d" },
                             running = initial?.running ?: false,
                         )
                     )

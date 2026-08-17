@@ -251,6 +251,14 @@ fun ConfigDetailScreen(
                         },
                     )
                     HorizontalDivider()
+                    InfoLine(
+                        "初始化系统",
+                        when (config.init) {
+                            "run-parts" -> "run-parts（${config.initPath.ifBlank { "未设置路径" }}）"
+                            else -> "SysV（rc${config.initLevel}）"
+                        },
+                    )
+                    HorizontalDivider()
                     InfoLine("额外组件", config.components.ifBlank { "core" })
                 }
             }

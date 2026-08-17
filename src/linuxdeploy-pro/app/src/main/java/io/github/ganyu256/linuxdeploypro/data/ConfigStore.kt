@@ -66,7 +66,8 @@ object ConfigStore {
         put(sb, "DISTRIB", cfg.distro)
         put(sb, "ARCH", "arm64")
         put(sb, "SUITE", cfg.release)
-        put(sb, "INCLUDE", cfg.components)
+        // INCLUDE 恒含 init 组件：初始化系统选项（sysv/run-parts）依赖它生效
+        put(sb, "INCLUDE", withInit(cfg.components))
         put(sb, "METHOD", "chroot")
         if (cfg.path.isNotBlank()) put(sb, "CHROOT_DIR", cfg.path)
         if (cfg.installType == "image" && cfg.path.isNotBlank()) {
@@ -86,6 +87,10 @@ object ConfigStore {
         put(sb, "USER_GROUPS", cfg.userGroups)
         put(sb, "MOUNTS", cfg.mounts.joinToString(" "))
         put(sb, "SSH_PORT", cfg.sshPort)
+        // 初始化系统：sysv 写 INIT_LEVEL；run-parts 写 INIT_PATH（对应 CLI include/init 组件参数）
+        put(sb, "INIT", cfg.init)
+        if (cfg.init == "sysv") put(sb, "INIT_LEVEL", cfg.initLevel)
+        if (cfg.init == "run-parts") put(sb, "INIT_PATH", cfg.initPath)
         // 原子写：先写 .tmp 再 rename。
         val tmp = File(file.parentFile, "${file.name}.tmp")
         tmp.writeText(sb.toString())
@@ -136,6 +141,8 @@ object ConfigStore {
         val sshEnabled = components.split(Regex("[ ,]+")).contains("extra/ssh")
         val targetType = kv["TARGET_TYPE"] ?: "directory"
         val mounts = kv["MOUNTS"].orEmpty().split(" ").filter { it.isNotBlank() }
+        // 初始化系统：旧配置无 INIT 键时默认 sysv（与 CLI INIT="${INIT:-sysv}" 兜底一致）
+        val initRaw = kv["INIT"] ?: "sysv"
         return ContainerConfig(
             name = name,
             distro = kv["DISTRIB"] ?: "debian",
@@ -152,7 +159,17 @@ object ConfigStore {
             sshPort = kv["SSH_PORT"] ?: "22",
             password = kv["USER_PASSWORD"] ?: "changeme",
             components = components,
+            init = if (initRaw == "run-parts") "run-parts" else "sysv",
+            initLevel = kv["INIT_LEVEL"] ?: "3",
+            initPath = kv["INIT_PATH"] ?: "/etc/rc.d",
         )
+    }
+
+    /** INCLUDE 保证含 init 组件（初始化系统 sysv/run-parts 依赖它生效） */
+    private fun withInit(components: String): String {
+        val list = components.split(Regex("[ ,]+")).filter { it.isNotBlank() }.toMutableList()
+        if ("init" !in list) list.add("init")
+        return list.joinToString(" ")
     }
 
     /** MB 数值 → 可读大小串（2048 → "2G"；1024 内 → "1024M"） */

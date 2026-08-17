@@ -18,6 +18,9 @@ package io.github.ganyu256.linuxdeploypro.model
  * @param sshPort       SSH 端口
  * @param password      容器默认密码（与 SSH 开关无关，始终需要）
  * @param components    额外组件，如 core、extra/ssh（空格分隔，对应 CLI 的 INCLUDE）
+ * @param init          初始化系统：sysv（默认，启动时执行 /etc/rcN.d 的 S 脚本）/ run-parts（自定义脚本目录）
+ * @param initLevel     sysv 运行级别（默认 3，如 2 3 4 5 的容器用 3 即可覆盖）
+ * @param initPath      run-parts 脚本目录（容器内路径，如 /etc/rc.d）
  * @param running       运行状态（由 CLI status 回传；部署中状态由前端 opLabel 判断）
  */
 data class ContainerConfig(
@@ -36,5 +39,8 @@ data class ContainerConfig(
     val sshPort: String = "22",
     val password: String = "changeme",
     val components: String = "core",
+    val init: String = "sysv",
+    val initLevel: String = "3",
+    val initPath: String = "/etc/rc.d",
     var running: Boolean = false,
 )

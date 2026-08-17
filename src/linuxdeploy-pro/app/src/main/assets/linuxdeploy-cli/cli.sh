@@ -705,7 +705,7 @@ config_create()
     [ -e "${conf_file}" ] && { msg "配置已存在: ${name}"; return 1; }
 
     # 重置全部配置键，避免继承当前配置的旧值
-    unset DISTRIB ARCH SUITE INCLUDE METHOD CHROOT_DIR TARGET_PATH SOURCE_PATH USER_NAME USER_PASSWORD EXTRA_PACKAGES USER_GROUPS MOUNTS SSH_PORT GRAPHICS TARGET_TYPE DISK_SIZE FS_TYPE DNS LOCALE HOST_NAME
+    unset DISTRIB ARCH SUITE INCLUDE METHOD CHROOT_DIR TARGET_PATH SOURCE_PATH USER_NAME USER_PASSWORD EXTRA_PACKAGES USER_GROUPS MOUNTS SSH_PORT GRAPHICS TARGET_TYPE DISK_SIZE FS_TYPE DNS LOCALE HOST_NAME INIT INIT_LEVEL INIT_PATH
     # 先解析用户传入的参数（进入当前变量与 OPTLST）
     local OPTLST=" "
     params_parse "$@"
@@ -714,7 +714,7 @@ config_create()
 
     # 确保默认键都在参数表中（用户传入的键已存在）
     local key
-    for key in DISTRIB ARCH SUITE INCLUDE METHOD CHROOT_DIR TARGET_PATH USER_NAME USER_PASSWORD USER_GROUPS MOUNTS SSH_PORT GRAPHICS TARGET_TYPE DISK_SIZE FS_TYPE
+    for key in DISTRIB ARCH SUITE INCLUDE METHOD CHROOT_DIR TARGET_PATH USER_NAME USER_PASSWORD USER_GROUPS MOUNTS SSH_PORT GRAPHICS TARGET_TYPE DISK_SIZE FS_TYPE INIT INIT_LEVEL
     do
         if [ -n "${OPTLST##* ${key} *}" ]; then
             OPTLST="${OPTLST}${key} "
@@ -725,8 +725,12 @@ config_create()
     DISTRIB="${DISTRIB:-debian}"
     ARCH="${ARCH:-arm64}"
     SUITE="${SUITE:-trixie}"
-    INCLUDE="${INCLUDE:-bootstrap}"
+    # 默认 INCLUDE 含 init 组件：启动容器时执行初始化脚本（默认 SysV，见 INIT 键）
+    INCLUDE="${INCLUDE:-bootstrap init}"
     METHOD="${METHOD:-chroot}"
+    # 初始化系统默认 SysV：start 时执行 /etc/rc3.d/ 的 S 脚本（Debian 系布局）
+    INIT="${INIT:-sysv}"
+    INIT_LEVEL="${INIT_LEVEL:-3}"
     USER_NAME="${USER_NAME:-root}"
     USER_PASSWORD="${USER_PASSWORD:-changeme}"
     USER_GROUPS="${USER_GROUPS:-aid_inet aid_sdcard_rw aid_graphics}"
@@ -2168,6 +2172,11 @@ fi
 
 # 固定启动方式为 chroot（unshare 暂不支持，4.0 目标）
 METHOD="chroot"
+
+# 初始化系统兜底：旧配置可能无 INIT 键，统一默认 sysv（Debian 系 /etc/rcN.d 布局）；
+# INCLUDE 含 init 组件时组件依赖解析依赖 INIT 值，缺省会直接报“缺少必要参数”。
+INIT="${INIT:-sysv}"
+INIT_LEVEL="${INIT_LEVEL:-3}"
 
 # 常驻显示当前配置（--json 模式隐藏横幅，避免污染机器可读输出）
 if [ "${JSON_MODE}" != "true" ]; then
