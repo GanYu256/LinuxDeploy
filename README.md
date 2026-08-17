@@ -1,6 +1,6 @@
 # Linux Deploy
 
-在 Android 上部署 Linux 发行版（chroot），无需 root 系统分区修改。
+在 Android 上部署 Linux 发行版（chroot）。
 
 ## 项目结构
 
@@ -10,7 +10,7 @@ src/
 └── linuxdeploy-pro/    # Android 前端 App（Kotlin + Jetpack Compose）
 ```
 
-- **linuxdeploy-cli**：部署/启动/停止/配置管理 CLI。支持 Debian/Ubuntu/Kali/Archlinux/CentOS/Fedora/Alpine/Slackware 等发行版（arm64 优先），含 ssh、VNC、X11、LXDE/MATE/XFCE 桌面组件。运行状态检测基于容器内 `ldstatus` 标记进程，跨 su 命名空间可靠。
+- **linuxdeploy-cli**：部署/启动/停止/配置管理 CLI。支持 Debian/Ubuntu/Kali/Archlinux/Fedora/Alpine等发行版
 - **linuxdeploy-pro**：Android App（minSdk 28 / targetSdk 36），内置最新 CLI 资源（`app/src/main/assets/linuxdeploy-cli/`），首次启动自动解压；支持配置管理、部署、启动/停止、容器内终端、开机自启。
 
 ## 版本
@@ -34,4 +34,4 @@ cd src/linuxdeploy-pro
 
 ## 许可
 
-GPLv3。CLI 沿袭自 [linuxdeploy](https://github.com/meefik/linuxdeploy) 的 GPLv3 代码，App 前端为独立实现。
+GPLv3。CLI 沿袭自 [linuxdeploy](https://github.com/meefik/linuxdeploy) 的 GPLv3 代码进行重构，App 前端为独立实现。

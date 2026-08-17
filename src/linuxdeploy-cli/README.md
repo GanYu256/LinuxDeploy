@@ -1,19 +1,20 @@
-# Linux Deploy CLI 4.0
+# Linux Deploy CLI 4.1.13
 
 > 维护：GanYu256 | 全中文日志 | 配置切换即锁定 | 只维护 arm64
 
-Linux Deploy CLI 4.0 是 LinuxDeploy-Pro 命令行工具的全面重构版本。在保留
-chroot 容器核心能力（构建、挂载、启动、停止、导入导出）的同时，重做了命令层、
-配置管理与安全机制，并全面改用中文注释与日志输出。
+Linux Deploy CLI 是 LinuxDeploy-Pro 的命令行工具，提供 chroot 容器核心能力
+（构建、挂载、启动、停止、导入导出），命令层、配置管理与安全机制统一设计，
+输出全面中文。
 
 本仓库只维护 CLI 脚本，APK 前端不在范围内。
 
 ## 版本沿革
 
-- 基线：app 锁定版 `79924f593556`（原 VERSION 2.5.1）
-- 前代 CLI：3.1.0（LinuxDeploy-Pro 附带的旧版脚本，命令层老旧、配置易误操作）
+- 基线：app 锁定版 `79924f593556`（VERSION 2.5.1）
 - 4.0：全面重构——命令层重设计、配置切换即锁定、安全护栏、中文日志
-- 设计文档：[docs/4.0-重构设计.md](docs/4.0-重构设计.md)（决策与事故根因）
+- 4.1.x：运行状态检测改为容器内 ldstatus 标记进程（跨 su 命名空间可靠）、
+  版本号统一（当前 4.1.13）
+- 设计文档：[docs/设计说明.md](docs/设计说明.md)
 
 ## 环境要求
 
@@ -82,8 +83,9 @@ rootfs 命令:
   export <归档>                   导出当前容器为 rootfs 归档
   mount                           挂载容器
   umount                          卸载容器
+```
 
-## 行为说明（4.0）
+## 行为说明
 
 - **切换即锁定**：`config use <名称>` 切换当前配置，后续所有命令只作用于该配置。
   任何命令输出顶部都会显示当前配置名称，避免误操作。
@@ -92,14 +94,26 @@ rootfs 命令:
 - **启动即挂载、停止即卸载**：`start` 自动挂载 proc/sys/dev 等系统文件，
   并挂载配置里的 `MOUNTS` 自定义挂载点（`"源:目标"` 空格分隔）；
   `stop` 停止组件后自动卸载全部挂载，无需额外步骤。
-- **chroot 语义**：容器"运行中"即"已挂载"（chroot 无独立进程树），
-  `status` 的 `running` 与 `mounted` 保持一致。
+- **运行状态检测**：容器内 `ldstatus` 标记进程（`/run/ldstatus/pid`）作为运行
+  标记，`status` 据此判断 running，跨 su 命名空间可靠；`mounted` 表示当前
+  命名空间内可见的挂载状态，二者独立输出。
 - **JSON 协议**：`--json config current/list/show`、`--json check`、`--json status`
   均输出机器可读结果，供 APK 前端解析。
 
 ## 变更日志
 
-### 4.0（2026-08，当前主线）
+### 4.1.13（2026-08，当前主线）
+
+- 版本号统一为 4.1.13（cli.sh VERSION 与 App versionName/EXTRACT_MARKER 一致）
+- 运行状态检测：新增 `core/ldstatus` 组件，容器内标记进程跨命名空间可靠判定
+- 开机自启（App 侧）：BootReceiver 读取自启配置调用 start
+
+### 4.1（2026-08）
+
+- 自启开关（App 侧）：容器卡菜单开关，删除配置/容器时自动清除自启条目
+- 状态刷新（App 侧）：启动/停止后与 ON_RESUME 时刷新运行状态
+
+### 4.0（2026-08）
 
 - 命令层重构：`config` 子命令统一、`check` 自检、`--json` 协议输出
 - 配置切换即锁定，杜绝误读其他配置导致清空工作区
@@ -111,7 +125,6 @@ rootfs 命令:
 - 构建期 statx 兼容层（旧内核 4.19 上 Debian 13 可正常构建）
 - 实测构建成功：Debian 13 (trixie)、Alpine 3.24、Arch Linux (aarch64)、
   Kali 2026.3、Ubuntu 24.04（arm64，清华/阿里镜像源）
-```
 
 执行任意命令时，输出顶部都会显示**当前配置名称与容器目录**，时刻提醒你操作对象。
 
@@ -152,13 +165,13 @@ rootfs 命令:
 
 - 当前配置名持久化在 `config/.current`，每次运行自动读取；
 - `config use <名称>` 切换后即锁定，后续所有命令只作用于该配置；
-- 不再有旧版 `-p` 临时指定配置的方式，从根上杜绝"切错配置、误清容器"。
+- 操作对象由 `.current` 显式确定，避免误操作。
 
 ### 配置隔离
 
 - `config create` 未显式指定 `--chroot-dir` 时，自动分配独立目录
   `<项目根>/builds/<配置名>`，与既有容器物理隔离；
-- 老配置（迁移前创建）保留其原有 `CHROOT_DIR`，迁移需手工确认。
+- 既有配置保留其原有 `CHROOT_DIR`，迁移需手工确认。
 
 ### 安全护栏
 
@@ -185,7 +198,7 @@ rootfs 命令:
 ```
 include/
 ├── bootstrap/   发行版构建（debian/ubuntu/kali/alpine/archlinux/slackware/rootfs）
-├── core/        容器核心（aid、mnt、net、hostname、hosts、locale、su、sudo 等）
+├── core/        容器核心（aid、ldstatus、mnt、net、hostname、hosts、locale、su、sudo 等）
 ├── init/        容器初始化（sysv、run-parts）
 ├── extra/       附加服务（ssh、pulse）
 ├── desktop/     桌面环境（lxde、xfce、mate、xterm、dbus 等）
@@ -228,7 +241,7 @@ linuxdeploy/               项目根
 
 ## 相关文档
 
-- [docs/4.0-重构设计.md](docs/4.0-重构设计.md) —— 命令层设计与事故根因
+- [docs/设计说明.md](docs/设计说明.md) —— 命令层与核心机制设计
 - [docs/statx-shim.md](docs/statx-shim.md) —— 旧内核 statx 兼容层说明
 
 ## 许可证
