@@ -1,0 +1,12 @@
+# 构建产物与本地配置
+.gradle/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+*.apk
+cache/
+tmp/
+logs/
+keystore/

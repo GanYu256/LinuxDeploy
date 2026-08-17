@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 纯 Compose 应用：用系统主题打底，界面全部由 Miuix 绘制 -->
+    <style name="Theme.LinuxDeployPro" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
+</resources>

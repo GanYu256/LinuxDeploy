@@ -1,0 +1,14 @@
+# 敏感与本地文件
+keystore/
+local.properties
+*.jks
+*.apk
+*.log
+config/
+rootfs/
+tmp/
+build/
+.gradle/
+.idea/
+*.iml
+cache/

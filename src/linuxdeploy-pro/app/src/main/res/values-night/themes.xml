@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色 / AMOLED 模式启动背景：纯黑，避免启动瞬间闪白 -->
+    <style name="Theme.LinuxDeployPro" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#000000</item>
+    </style>
+</resources>

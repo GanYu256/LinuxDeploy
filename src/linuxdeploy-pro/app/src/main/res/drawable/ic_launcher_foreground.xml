@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 启动图标前景：居中白色圆徽章 + 蓝紫 ">_" 提示符，Miuix 圆润风格 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 白色圆徽章：中心 (54,54)，半径 25 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,29 a25,25 0 1 1 -0.01,0 z" />
+    <!-- 提示符 ">"：蓝 -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M45,48.5 L53.5,54 L45,59.5"
+        android:strokeColor="#FF4F6BFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="6.5" />
+    <!-- 提示符 "_"：紫 -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M53.5,62 h11.5"
+        android:strokeColor="#FF8B2FF7"
+        android:strokeLineCap="round"
+        android:strokeWidth="6.5" />
+</vector>
