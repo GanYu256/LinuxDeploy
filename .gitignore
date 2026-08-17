@@ -8,6 +8,8 @@ config/
 rootfs/
 tmp/
 build/
+logs/
+/docs/
 .gradle/
 .idea/
 *.iml
