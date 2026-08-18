@@ -46,7 +46,8 @@ do_configure()
     sed -i -E 's/#?PermitRootLogin .*/PermitRootLogin yes/g' "${sshd_config}"
     sed -i -E 's/#?AcceptEnv .*/AcceptEnv LANG/g' "${sshd_config}"
     # 端口写入 sshd_config（systemctl 模式经 ssh.service 启动 sshd 时无 -p 参数，走配置端口）
-    sed -i -E 's/^#?Port .*/Port '"${SSH_PORT}"'/g' "${sshd_config}"
+    sed -i -E 's/^#?Port .*/Port '"${SSH_PORT}"'/' "${sshd_config}"
+    grep -q "^Port " "${sshd_config}" || echo "Port ${SSH_PORT}" >> "${sshd_config}"
     # 确保 host key 存在（systemctl 模式由 systemctl 拉起 sshd，需密钥就绪）
     if [ -z "$(ls "${CHROOT_DIR}/etc/ssh/" 2>/dev/null | grep 'key$')" ]; then
         chroot_exec -u root ssh-keygen -A >/dev/null 2>&1 || true
@@ -63,9 +64,17 @@ do_start()
     msg -n ":: Starting ${COMPONENT} ... "
     # systemctl 模式：ssh 由 systemctl 管理（ssh.service），CLI 不直启
     if [ "${INIT}" = "systemctl" ]; then
+        # 端口/密钥在每次启动也应用（do_configure 仅部署时执行，老容器靠此兜底）
+        local sshd_config
+        sshd_config="${CHROOT_DIR}/etc/ssh/sshd_config"
+        sed -i -E 's/^#?Port .*/Port '"${SSH_PORT}"'/' "${sshd_config}" 2>/dev/null || true
+        grep -q "^Port " "${sshd_config}" 2>/dev/null || echo "Port ${SSH_PORT}" >> "${sshd_config}"
+        if [ -z "$(ls "${CHROOT_DIR}/etc/ssh/" 2>/dev/null | grep 'key$')" ]; then
+            chroot_exec -u root ssh-keygen -A >/dev/null 2>&1 || true
+        fi
         # 兜底：确保已 enable（覆盖部署早于本版本的容器）
         chroot_exec /usr/bin/systemctl enable ssh.service 2>/dev/null || true
-        msg "跳过（systemctl 模式：ssh 由 systemctl 管理，default.target 自动拉起）"
+        msg "跳过（systemctl 模式：ssh 由 systemctl 管理，端口 ${SSH_PORT} 已写入 sshd_config）"
         return 0
     fi
     is_stopped /var/run/sshd.pid /run/sshd.pid || test -z $(pidof /data/local/mnt/usr/sbin/sshd)
