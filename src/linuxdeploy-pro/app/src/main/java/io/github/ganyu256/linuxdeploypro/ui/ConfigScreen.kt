@@ -437,30 +437,64 @@ fun ConfigScreen(
                 ),
             ) {
                 Column {
+                    // systemctl 选项仅 Debian 系列（debian/ubuntu/kali）提供
+                    val debianFamily = distro in listOf("debian", "ubuntu", "kali")
+                    val initItems = if (debianFamily) {
+                        listOf("SysV（/etc/rcN.d）", "run-parts（自定义目录）", "systemctl（init 模式）")
+                    } else {
+                        listOf("SysV（/etc/rcN.d）", "run-parts（自定义目录）")
+                    }
+                    val initValues = if (debianFamily) {
+                        listOf("sysv", "run-parts", "systemctl")
+                    } else {
+                        listOf("sysv", "run-parts")
+                    }
+                    // 非 Debian 系列不支持 systemctl：选中态回落为 sysv
+                    val displayInit = if (initSystem == "systemctl" && !debianFamily) "sysv" else initSystem
                     OverlayDropdownPreference(
                         title = "初始化系统",
-                        summary = when (initSystem) {
+                        summary = when (displayInit) {
                             "run-parts" -> "run-parts（自定义脚本目录）"
+                            "systemctl" -> "systemctl（init 模式，拉起 default.target 服务）"
                             else -> "SysV（/etc/rcN.d，Debian 默认）"
                         },
-                        items = listOf("SysV（/etc/rcN.d）", "run-parts（自定义目录）"),
-                        selectedIndex = if (initSystem == "run-parts") 1 else 0,
-                        onSelectedIndexChange = { initSystem = if (it == 1) "run-parts" else "sysv" },
+                        items = initItems,
+                        selectedIndex = initValues.indexOf(displayInit).coerceAtLeast(0),
+                        onSelectedIndexChange = { initSystem = initValues[it] },
                     )
-                    if (initSystem == "sysv") {
+                    if (displayInit == "sysv") {
                         HorizontalDivider()
                         LabeledTextField(
                             label = "运行级别",
                             state = initLevelState,
                             hint = "默认 3：启动时按序执行 /etc/rc3.d/ 的 S 脚本，停止时执行 rc6.d 的 K 脚本",
                         )
-                    } else {
+                    } else if (displayInit == "run-parts") {
                         HorizontalDivider()
                         LabeledTextField(
                             label = "脚本目录（容器内路径）",
                             state = initPathState,
                             hint = "目录内脚本按顺序执行 start；停止时逆序执行 stop",
                         )
+                    } else {
+                        HorizontalDivider()
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                        ) {
+                            Text(
+                                text = "systemctl（init 模式）",
+                                fontSize = 13.sp,
+                                color = MiuixTheme.colorScheme.onSurfaceContainerVariant,
+                            )
+                            Spacer(modifier = Modifier.padding(top = 6.dp))
+                            Text(
+                                text = "需要 python3（部署时默认安装）；启动时拉起 systemctl --init，自动按序启动 init.d 与已启用（enable）的 systemd 服务",
+                                fontSize = 12.sp,
+                                color = MiuixTheme.colorScheme.onSurfaceContainerVariant.copy(alpha = 0.8f),
+                            )
+                        }
                     }
                 }
             }

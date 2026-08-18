@@ -159,7 +159,11 @@ object ConfigStore {
             sshPort = kv["SSH_PORT"] ?: "22",
             password = kv["USER_PASSWORD"] ?: "changeme",
             components = components,
-            init = if (initRaw == "run-parts") "run-parts" else "sysv",
+            init = when (initRaw) {
+                "run-parts" -> "run-parts"
+                "systemctl" -> "systemctl"
+                else -> "sysv"
+            },
             initLevel = kv["INIT_LEVEL"] ?: "3",
             initPath = kv["INIT_PATH"] ?: "/etc/rc.d",
         )

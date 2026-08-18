@@ -255,6 +255,7 @@ fun ConfigDetailScreen(
                         "初始化系统",
                         when (config.init) {
                             "run-parts" -> "run-parts（${config.initPath.ifBlank { "未设置路径" }}）"
+                            "systemctl" -> "systemctl（init 模式）"
                             else -> "SysV（rc${config.initLevel}）"
                         },
                     )

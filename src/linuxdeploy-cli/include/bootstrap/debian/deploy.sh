@@ -27,7 +27,9 @@ fi
 # - locales：本地化支持
 # - sudo：权限管理
 # - man-db：手册数据库
-BASE_INCLUDE_PACKAGES="locales,sudo,man-db"
+# - python3：systemctl（python 实现）运行依赖
+# - fish：用户要求默认安装的 shell
+BASE_INCLUDE_PACKAGES="locales,sudo,man-db,python3,fish"
 # 排除包清单（容器内不需要 init 与 systemd 引导）
 BASE_EXCLUDE_PACKAGES="init,systemd-sysv"
 
