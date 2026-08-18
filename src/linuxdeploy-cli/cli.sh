@@ -3,7 +3,7 @@
 #
 # Linux Deploy CLI 4.1.13
 # 维护：GanYu256
-# 说明：本版本为全面重构，命令层重设计、配置切换即锁定、全中文注释与日志。
+# 说明：本版本为全面重构，命令层重设计、无配置锁（统一 -c 指定配置）、全中文注释与日志。
 # 基线：app 锁定版 79924f593556（原 VERSION 2.5.1）
 #
 ################################################################################
@@ -522,43 +522,12 @@ params_check()
 }
 
 ################################################################################
-# 配置系统（4.0：切换即锁定）
-################################################################################
+# 配置系统（4.1：无配置锁，统一 -c <配置名> 指定）
 
-# 当前配置持久化文件路径
-config_current_file()
+# 配置必需检查（无 -c 时容器操作命令拒绝执行）
+require_config()
 {
-    echo "${CONFIG_DIR}/.current"
-}
-
-# 读取当前配置名（锁定机制核心）
-# 优先读 .current；若无效则回退到第一个存在的配置
-config_current()
-{
-    local cur
-    if [ -f "${CONFIG_DIR}/.current" ]; then
-        cur=$(cat "${CONFIG_DIR}/.current" 2>/dev/null)
-        if [ -n "${cur}" ] && [ -f "${CONFIG_DIR}/${cur}.conf" ]; then
-            echo "${cur}"
-            return 0
-        fi
-    fi
-    # 回退：取配置目录中第一个 .conf
-    local f
-    for f in "${CONFIG_DIR}"/*.conf; do
-        [ -e "${f}" ] || continue
-        echo "$(basename "${f}" .conf)"
-        return 0
-    done
-    return 1
-}
-
-# 写入当前配置名（切换即锁定）
-config_set_current()
-{
-    local name="$1"
-    [ -n "${name}" ] || return 1
-    echo "${name}" > "${CONFIG_DIR}/.current"
+    [ -n "${CURRENT_CONF}" ] || { msg "请用 -c <配置名> 指定操作配置（config list/create 等配置管理命令除外）"; exit 1; }
 }
 
 # 校验配置名并返回配置文件路径
@@ -598,7 +567,6 @@ config_list()
         local first="true"
         local name distrib arch suite chroot_dir target_type
         printf '{\n'
-        printf '  "current": "%s",\n' "$(json_escape "$(config_current)")"
         printf '  "configs": [\n'
         for conf in "${CONFIG_DIR}"/*.conf; do
             [ -e "${conf}" ] || continue
@@ -631,16 +599,16 @@ config_list()
         )
     done
     msg "--------------------------------------------------------------"
-    msg "共 ${count} 个配置；当前配置: $(config_current)"
+    msg "共 ${count} 个配置"
 }
 
-# 显示配置详情（默认当前配置）
+# 显示配置详情（名称取参数或 -c 指定配置）
 config_show()
 {
-    local name="$1"
+    local name="${1:-${CURRENT_CONF}}"
     if [ -z "${name}" ]; then
-        name=$(config_current)
-        [ -n "${name}" ] || { msg "尚无任何配置，请先执行: config create <名称>"; return 1; }
+        msg "用法: config show [配置名称]（或用 -c <配置名> config show）"
+        return 1
     fi
     conf_file
     local conf_file=$(config_file_of "${name}")
@@ -673,23 +641,9 @@ config_show()
     msg "----------------------------------------"
     cat "${conf_file}"
     msg "----------------------------------------"
-    # 标记当前配置
-    if [ "${name}" = "$(config_current)" ]; then
-        msg "[当前使用]"
-    fi
 }
 
-# 切换当前配置（锁定）
-config_use()
-{
-    local name="$1"
-    [ -n "${name}" ] || { msg "用法: config use <配置名称>"; return 1; }
-    config_exists "${name}" || { msg "配置不存在: ${name}"; return 1; }
-    config_set_current "${name}"
-    msg "已切换到配置: ${name}"
-}
-
-# 新建配置（自动切换并锁定）
+# 新建配置
 # 用法: config create <名称> [--key=value ...]
 config_create()
 {
@@ -752,20 +706,17 @@ config_create()
     TARGET_PATH="${TARGET_PATH:-${CHROOT_DIR}}"
     params_write "${conf_file}"
 
-    # 创建后立即切换锁定
-    config_set_current "${name}"
     msg "已创建配置: ${name}"
     msg "容器目录: ${CHROOT_DIR}"
-    msg "注意: 新配置已自动切换并锁定，后续命令均作用于该配置。"
+    msg "提示: 后续操作请用 -c ${name} 指定该配置。"
 }
 
-# 编辑当前配置参数
-# 用法: config edit [--key=value ...]
+# 编辑 -c 指定配置参数
+# 用法: cli.sh -c <配置名> config edit [--key=value ...]
 config_edit()
 {
-    local name
-    local name=$(config_current)
-    [ -n "${name}" ] || { msg "尚无当前配置，请先执行: config create <名称>"; return 1; }
+    local name="${CURRENT_CONF}"
+    [ -n "${name}" ] || { msg "请用 -c <配置名> 指定要编辑的配置"; return 1; }
     conf_file
     local conf_file=$(config_file_of "${name}")
     [ -e "${conf_file}" ] || { msg "配置文件缺失: ${conf_file}"; return 1; }
@@ -833,30 +784,16 @@ config_delete()
     fi
     rm -f "${conf_file}"
     msg "已删除配置: ${name}"
-
-    # 若删除的是当前配置，自动切换到剩余配置或清空锁定
-    if [ "${name}" = "$(config_current)" ]; then
-        local next
-        next=$(config_current)
-        if [ -n "${next}" ]; then
-            config_set_current "${next}"
-            msg "当前配置已自动切换为: ${next}"
-        else
-            rm -f "${CONFIG_DIR}/.current"
-            msg "已无可用配置，当前配置锁定已清空。"
-        fi
-    fi
 }
 
-# 导出当前配置到文件
-# 用法: config export <文件>
+# 导出 -c 指定配置到文件
+# 用法: cli.sh -c <配置名> config export <文件>
 config_export()
 {
     local out_file="$1"
     [ -n "${out_file}" ] || { msg "用法: config export <导出文件>"; return 1; }
-    name conf_file
-    local name=$(config_current)
-    [ -n "${name}" ] || { msg "尚无当前配置。"; return 1; }
+    local name="${CURRENT_CONF}"
+    [ -n "${name}" ] || { msg "请用 -c <配置名> 指定要导出的配置"; return 1; }
     local conf_file=$(config_file_of "${name}")
     [ -e "${conf_file}" ] || { msg "配置文件缺失: ${conf_file}"; return 1; }
     cp "${conf_file}" "${out_file}"
@@ -900,10 +837,8 @@ config_import()
         msg "容器目录: ${imported_dir}"
     fi
 
-    # 导入后自动切换锁定
-    config_set_current "${dst}"
     msg "已导入配置: ${dst}"
-    msg "注意: 已自动切换并锁定到新配置。"
+    msg "提示: 后续操作请用 -c ${dst} 指定该配置。"
 }
 
 ################################################################################
@@ -1899,14 +1834,12 @@ do_check()
         esac
     fi
 
-    # 当前配置
-    local cur
-    local cur=$(config_current)
-    if [ -n "${cur}" ]; then
-        msg "[通过] 当前配置: ${cur}"
+    # 操作配置（-c 指定）
+    if [ -n "${CURRENT_CONF}" ]; then
+        msg "[通过] 操作配置: ${CURRENT_CONF}"
     else
-        msg "[失败] 没有可用配置，请先执行: config create <名称>"
-        fail=$((fail+1))
+        msg "[警告] 未指定操作配置（可用 -c <配置名> 指定；check 为环境自检，不阻塞）"
+        warn=$((warn+1))
     fi
 
     # 配置目录权限
@@ -1973,7 +1906,7 @@ helper()
     printf '%s\n' \
 "Linux Deploy CLI ${VERSION}"
     printf '%s\n' \
-"维护：GanYu256 | 全中文日志 | 配置切换即锁定"
+"维护：GanYu256 | 全中文日志 | 无配置锁，统一 -c 指定配置"
     printf '%s\n' \
 "" \
 "用法: ${0##*/} [选项] 命令 [参数]" \
@@ -1982,23 +1915,21 @@ helper()
 "  -d            调试模式（输出详细日志）" \
 "  -t            跟踪模式（set -x）" \
 "  -j, --json    JSON 输出模式（供前端解析）" \
-"  -c <配置名>   显式指定操作配置（绕过 .current 锁；前端专用，锁留给纯 CLI）" \
+"  -c <配置名>   指定操作配置（容器操作命令必需）" \
 "  -h, --help    显示本帮助" \
 "" \
 "配置命令:" \
 "  config list                    列出全部配置" \
-"  config show [名称]             显示当前（或指定）配置详情" \
-"  config current                 查看当前配置名称" \
-"  config use <名称>              切换当前配置（锁定）" \
-"  config create <名称> [--k=v]   新建配置并自动切换（自动隔离容器目录）" \
-"  config edit [--k=v ...]        修改当前配置参数" \
+"  config show [名称]             显示配置详情（名称或 -c 指定）" \
+"  config create <名称> [--k=v]   新建配置（自动隔离容器目录）" \
+"  config edit [--k=v ...]        修改 -c 指定配置参数" \
 "  config copy <源> <新名称>      复制配置" \
 "  config delete <名称> [--purge] 删除配置（--purge 连同容器目录删除）" \
-"  config export <文件>           导出当前配置" \
+"  config export <文件>           导出 -c 指定配置" \
 "  config import <文件|名称>      导入配置（自动隔离容器目录）" \
 "" \
 "容器命令:" \
-"  deploy [--dry-run] [--yes] [--k=v]  部署当前配置（含安全护栏与确认）" \
+"  deploy [--dry-run] [--yes] [--k=v]  部署 -c 指定配置（含安全护栏与确认）" \
 "  start  [--mount]                启动容器" \
 "  stop   [--umount]               停止容器" \
 "  status                          查看容器状态" \
@@ -2007,12 +1938,12 @@ helper()
 "  resize <大小>                   调整镜像大小（如 8G / 512M，仅镜像安装）" \
 "" \
 "rootfs 命令:" \
-"  import <归档|URL>               导入 rootfs 到当前容器" \
-"  export <归档>                   导出当前容器为 rootfs 归档" \
+"  import <归档|URL>               导入 rootfs 到 -c 指定容器" \
+"  export <归档>                   导出 -c 指定容器为 rootfs 归档" \
 "  mount                           挂载容器" \
 "  umount                          卸载容器" \
 "" \
-"常用部署参数（--key=value 形式，写入当前配置）:" \
+"常用部署参数（--key=value 形式，写入 -c 指定配置）:" \
 "  --distrib=debian|ubuntu|kali|alpine|archlinux" \
 "  --arch=arm64                    目标架构（本项目只维护 arm64）" \
 "  --suite=trixie                  发行版代号" \
@@ -2097,7 +2028,7 @@ IFS="${oldifs}"
 set +f
 
 # 解析全局选项（-d 调试 / -t 跟踪 / -j JSON / -h 帮助 / -c 指定配置）
-# -c <配置名>：显式指定操作目标配置，绕过 .current 锁（锁仅服务纯 CLI 用户）。
+# -c <配置名>：唯一指定操作配置的方式（无配置锁）。
 # 前端 app 直读 config/ 目录 + 用 -c 指定配置执行命令，不触碰锁文件。
 OPTIND=1
 while getopts :djtc:h FLAG
@@ -2204,7 +2135,7 @@ env_init_tools()
 }
 env_init_tools
 
-# 确定操作配置：-c 显式指定优先（只读取，不写 .current 锁）；否则读 .current 锁
+# 确定操作配置：仅由 -c <配置名> 指定（无配置锁）
 if [ -n "${OPT_CONF_NAME}" ]; then
     if config_exists "${OPT_CONF_NAME}"; then
         CURRENT_CONF="${OPT_CONF_NAME}"
@@ -2213,10 +2144,10 @@ if [ -n "${OPT_CONF_NAME}" ]; then
         exit 1
     fi
 else
-    CURRENT_CONF=$(config_current)
+    CURRENT_CONF=""
 fi
 
-# 读取当前配置参数
+# 读取操作配置参数
 OPTLST=" " # 首字符必须为空格
 if [ -n "${CURRENT_CONF}" ]; then
     CONF_FILE=$(config_file_of "${CURRENT_CONF}")
@@ -2233,10 +2164,10 @@ METHOD="chroot"
 INIT="${INIT:-sysv}"
 INIT_LEVEL="${INIT_LEVEL:-3}"
 
-# 常驻显示当前配置（--json 模式隐藏横幅，避免污染机器可读输出）
+# 常驻显示操作配置（--json 模式隐藏横幅，避免污染机器可读输出）
 if [ "${JSON_MODE}" != "true" ]; then
     msg "=========================================="
-    msg " Linux Deploy CLI ${VERSION} | 当前配置: ${CURRENT_CONF:-无}"
+    msg " Linux Deploy CLI ${VERSION} | 操作配置: ${CURRENT_CONF:-未指定}"
     msg " 容器目录: ${CHROOT_DIR}"
     msg "=========================================="
 fi
@@ -2255,19 +2186,6 @@ config)
     ;;
     show)
         config_show "$1"
-        exit $?
-    ;;
-    current)
-        # 查看当前配置名称（--json 模式输出结构化结果）
-        if [ "${JSON_MODE}" = "true" ]; then
-            printf '{"current": "%s"}\n' "$(json_escape "$(config_current)")"
-        else
-            config_current
-        fi
-        exit $?
-    ;;
-    use)
-        config_use "$1"
         exit $?
     ;;
     create)
@@ -2302,7 +2220,8 @@ config)
 ;;
 
 deploy)
-    # 部署当前配置
+    require_config
+    # 部署 -c 指定配置
     log_open "${CURRENT_CONF:-deploy}"
     dry_run="false"
     yes_mode="false"
@@ -2425,6 +2344,7 @@ deploy)
 ;;
 
 start)
+    require_config
     # 启动容器
     log_open "${CURRENT_CONF:-start}"
     mount_flag="false"
@@ -2452,6 +2372,7 @@ start)
 ;;
 
 stop)
+    require_config
     # 停止容器
     log_open "${CURRENT_CONF:-stop}"
     umount_flag="false"
@@ -2479,6 +2400,7 @@ stop)
 ;;
 
 resize)
+    require_config
     # 调整镜像大小（仅支持 TARGET_TYPE=file 的镜像安装）
     log_open "${CURRENT_CONF:-resize}"
     image_resize "$1"
@@ -2486,6 +2408,7 @@ resize)
 ;;
 
 status)
+    require_config
     # 容器状态
     if [ $# -gt 0 ]; then
         DO_ACTION='do_status'
@@ -2497,6 +2420,7 @@ status)
 ;;
 
 shell)
+    require_config
     # 进入容器
     container_shell "$@"
     exit $?
@@ -2547,6 +2471,7 @@ check)
 ;;
 
 import)
+    require_config
     # 导入 rootfs
     log_open "${CURRENT_CONF:-import}"
     rootfs_import "$@"
@@ -2554,6 +2479,7 @@ import)
 ;;
 
 export)
+    require_config
     # 导出 rootfs
     log_open "${CURRENT_CONF:-export}"
     rootfs_export "$@"
@@ -2592,12 +2518,14 @@ rootfs)
 ;;
 
 mount)
+    require_config
     log_open "${CURRENT_CONF:-mount}"
     container_mount
     exit $?
 ;;
 
 umount)
+    require_config
     log_open "${CURRENT_CONF:-umount}"
     # 挂载不可见时尝试切入容器命名空间后卸载
     if ! container_mounted && [ "${LD_NSENTER}" != "1" ] && container_nsenter_run umount; then

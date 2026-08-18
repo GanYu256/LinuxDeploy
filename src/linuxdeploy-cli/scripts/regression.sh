@@ -22,21 +22,25 @@ echo "== CLI 4.0 回归自检 =="
 # 1. 语法
 check "bash 语法" "bash -n cli.sh"
 
-# 2. 基本命令可用（帮助/当前配置/列表）
+# 2. 基本命令可用（帮助/列表；无配置锁，容器操作统一 -c 指定）
 check "help" "./cli.sh --help"
-check "config current" "./cli.sh config current"
 check "config list" "./cli.sh config list"
+check "无 -c 时容器命令拒绝并提示" "./cli.sh status 2>&1 | grep -q '请用 -c'"
 
-# 3. 自检与状态
-check "check（非零退出容忍：警告不失败）" "./cli.sh check"
-check "status" "./cli.sh status"
-check "deploy --dry-run" "./cli.sh deploy --dry-run"
+# 准备临时配置（无锁模式：建临时配置后统一 -c 指定）
+echo "y" | ./cli.sh config delete reg-tmp >/dev/null 2>&1
+./cli.sh config create reg-tmp --chroot-dir="${TMPDIR:-/tmp}/reg-chroot" >/dev/null 2>&1
+
+# 3. 自检与状态（-c 指定配置）
+check "check（非零退出容忍：警告不失败）" "./cli.sh -c reg-tmp check"
+check "status" "./cli.sh -c reg-tmp status"
+check "deploy --dry-run" "./cli.sh -c reg-tmp deploy --dry-run"
 
 # 4. JSON 协议（机器可读）
 check "--json config list 含 configs" \
   "./cli.sh --json config list | grep -q '\"configs\"'"
-check "--json status" "./cli.sh --json status | grep -q '\"running\"'"
-check "--json check" "./cli.sh --json check | grep -q '\"ok\"'"
+check "--json status" "./cli.sh -c reg-tmp --json status | grep -q '\"running\"'"
+check "--json check" "./cli.sh -c reg-tmp --json check | grep -q '\"ok\"'"
 
 # 5. 回流功能（2026-08-14 从 APK 资产回流）
 check "resize 命令存在（无参返回解析错误）" \
@@ -47,6 +51,9 @@ check "TARGET_TYPE 持久化键已实现" "grep -q TARGET_TYPE cli.sh"
 
 # 6. 组件系统
 check "组件列表（当前发行版兼容）" "./cli.sh config list >/dev/null && ./cli.sh --help >/dev/null"
+
+# 7. 清理临时配置
+echo "y" | ./cli.sh config delete reg-tmp >/dev/null 2>&1
 
 echo "----------------------------------------"
 echo "结果: $PASS 通过, $FAIL 失败"
