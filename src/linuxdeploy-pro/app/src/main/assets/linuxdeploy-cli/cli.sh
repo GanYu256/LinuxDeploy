@@ -232,13 +232,16 @@ is_stopped()
     [ -z "$(get_pids)" ]
 }
 
-# 检查 ldstatus 标记进程是否存活：读容器内 pid 文件（跨命名空间）+ ps 校验名称
+# 检查 ldstatus 标记进程是否存活：读容器内 pid 文件（跨命名空间）+ 进程名校验。
+# 名称校验直接读 /proc/<pid>/cmdline 的 argv[0]（ldstatus 用 exec -a 改名），
+# 兼容 procps（ps -A 显示 comm）与 toybox（显示 argv[0]）的输出差异。
 ldstatus_running()
 {
     local ld_pid
     ld_pid=$(cat "${CHROOT_DIR}/run/ldstatus/pid" 2>/dev/null | tr -cd '0-9')
     [ -n "${ld_pid}" ] || return 1
-    ps -A 2>/dev/null | grep " ${ld_pid} " | grep -q ldstatus
+    [ -r "/proc/${ld_pid}/cmdline" ] || return 1
+    tr '\0' ' ' < "/proc/${ld_pid}/cmdline" | grep -q ldstatus
 }
 
 # 结束进程列表：入参为 pid 或 pid 文件路径（自动读取文件内数字 pid）。
@@ -1386,6 +1389,52 @@ container_umount()
     return 0
 }
 
+# 查找可用的 nsenter：
+# 1) PATH 中的 nsenter（Linux 宿主 util-linux；Android 10+ toybox 自带于 /system/bin）
+# 2) /system/bin、/system/xbin 显式路径（部分设备 PATH 不含）
+# 3) 打包 busybox 的 nsenter applet（工具链兜底，恒存在）
+# 输出：可直接执行的 nsenter 命令串；找不到返回非 0。
+nsenter_bin()
+{
+    local c
+    if command -v nsenter >/dev/null 2>&1; then
+        command -v nsenter
+        return 0
+    fi
+    for c in /system/bin/nsenter /system/xbin/nsenter "${ENV_DIR}/tools/busybox"; do
+        if [ -x "${c}" ]; then
+            if [ "${c##*/}" = "busybox" ]; then
+                echo "${c} nsenter"
+            else
+                echo "${c}"
+            fi
+            return 0
+        fi
+    done
+    return 1
+}
+
+# 跨命名空间执行：当前命名空间看不到容器挂载，但 ldstatus 判定容器运行中
+# （app 重启后新 su 会话处于不同挂载命名空间，容器挂载所在 ns 由 ldstatus
+# 常驻进程等持有）。通过 nsenter 切入容器 ns 后重新执行本命令。
+# 前置判定：ldstatus 存活（跨 ns 的 pid+进程名校验）确认容器确在运行才切入，
+# 避免 pid 复用/误判时钻进无关进程的命名空间。
+container_nsenter_run()
+{
+    [ "${LD_NSENTER}" = "1" ] && return 1    # 已切入，防递归
+    ldstatus_running || return 1             # 容器必须确认为运行中
+    local ld_pid ns_bin
+    ld_pid=$(cat "${CHROOT_DIR}/run/ldstatus/pid" 2>/dev/null | tr -cd '0-9')
+    [ -n "${ld_pid}" ] || return 1
+    ns_bin=$(nsenter_bin) || { msg "[警告] 容器运行在其它挂载命名空间，但未找到可用的 nsenter"; return 1; }
+    msg "容器挂载位于其它命名空间（ldstatus pid ${ld_pid}），正在切入命名空间执行 ..."
+    # 显式 sh 解释器执行：直接 exec 脚本会因 shebang #!/bin/sh 在目标命名空间
+    # 解析不到而 ENOENT（真机实测）；-c 显式带当前配置名（配置锁），不依赖
+    # .current 兜底；仅影响跨命名空间回退分支，正常 stop/umount 路径不变。
+    LD_NSENTER=1 ${ns_bin} -t ${ld_pid} -m -- sh "${ENV_DIR}/cli.sh" -c "${CURRENT_CONF}" "$@" </dev/null
+    return $?
+}
+
 # 启动容器：自动挂载系统文件（proc/sys/dev 等）后执行组件启动。
 # 自定义挂载点（MOUNTS 的 "源:目标"）由 core/mnt 组件的 do_start 负责挂载，
 # 因此 start 一步到位，不需要像原版那样先手动 mount。
@@ -1393,6 +1442,13 @@ container_start()
 {
     # 未挂载则自动挂载；根已挂载但 /proc 缺失时补齐（如部署后直接 start）
     if ! container_mounted; then
+        # 跨命名空间场景：ldstatus 判定容器运行中但当前 ns 看不到挂载
+        # （app 重启后 su 会话命名空间变化）→ 不重复挂载/启动，提示先 stop
+        # （stop 会自动切入容器命名空间执行）。start 不做 nsenter（保持简单）。
+        if ldstatus_running; then
+            msg "[提示] 容器运行在其它挂载命名空间中，启动已跳过；请执行 stop 停止（将自动切入命名空间）"
+            return 0
+        fi
         container_mount || return 1
     elif ! is_mounted "${CHROOT_DIR}/proc"; then
         container_mount >/dev/null 2>&1 || true
@@ -1410,7 +1466,15 @@ container_start()
 # 停止容器：执行组件停止后自动卸载全部挂载，一步到位。
 container_stop()
 {
-    container_mounted || { msg "容器未挂载，无需停止。" ; return 0; }
+    if ! container_mounted; then
+        # 跨命名空间场景：当前 ns 看不到挂载但容器运行中 → 切入容器 ns 后
+        # 重跑 stop（nsenter 实例中挂载可见，可正常停组件并卸载）
+        if [ "${LD_NSENTER}" != "1" ] && container_nsenter_run stop "$@"; then
+            return 0
+        fi
+        msg "容器未挂载，无需停止。"
+        return 0
+    fi
 
     local DO_ACTION='do_stop'
     if [ $# -gt 0 ]; then
@@ -2544,6 +2608,10 @@ mount)
 
 umount)
     log_open "${CURRENT_CONF:-umount}"
+    # 跨命名空间场景：当前 ns 看不到挂载但容器运行中 → 切入容器 ns 后卸载
+    if ! container_mounted && [ "${LD_NSENTER}" != "1" ] && container_nsenter_run umount; then
+        exit 0
+    fi
     container_umount
     exit $?
 ;;

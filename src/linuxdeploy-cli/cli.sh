@@ -1428,7 +1428,10 @@ container_nsenter_run()
     [ -n "${ld_pid}" ] || return 1
     ns_bin=$(nsenter_bin) || { msg "[警告] 容器运行在其它挂载命名空间，但未找到可用的 nsenter"; return 1; }
     msg "容器挂载位于其它命名空间（ldstatus pid ${ld_pid}），正在切入命名空间执行 ..."
-    LD_NSENTER=1 ${ns_bin} -t ${ld_pid} -m -- "${ENV_DIR}/cli.sh" "$@" </dev/null
+    # 显式 sh 解释器执行：直接 exec 脚本会因 shebang #!/bin/sh 在目标命名空间
+    # 解析不到而 ENOENT（真机实测）；-c 显式带当前配置名（配置锁），不依赖
+    # .current 兜底；仅影响跨命名空间回退分支，正常 stop/umount 路径不变。
+    LD_NSENTER=1 ${ns_bin} -t ${ld_pid} -m -- sh "${ENV_DIR}/cli.sh" -c "${CURRENT_CONF}" "$@" </dev/null
     return $?
 }
 
