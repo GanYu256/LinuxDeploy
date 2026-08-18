@@ -232,12 +232,26 @@ is_stopped()
     [ -z "$(get_pids)" ]
 }
 
-# 检查 ldstatus 标记进程是否存活：读容器内 pid 文件（跨命名空间）+ 进程名校验。
+# 读取 ldstatus 锚点 pid：配置侧锚点（<配置名>.ldstatus，任何命名空间可读）优先，
+# 回退容器内 /run/ldstatus/pid（兼容未写锚点的旧容器）。
+ldstatus_pid()
+{
+    local anchor
+    if [ -n "${CURRENT_CONF}" ]; then
+        anchor="${CONFIG_DIR}/${CURRENT_CONF}.ldstatus"
+        local ld_pid
+        ld_pid=$(cat "${anchor}" 2>/dev/null | tr -cd '0-9')
+        [ -n "${ld_pid}" ] && { echo "${ld_pid}"; return 0; }
+    fi
+    cat "${CHROOT_DIR}/run/ldstatus/pid" 2>/dev/null | tr -cd '0-9'
+}
+
+# 检查 ldstatus 标记进程是否存活：锚点 pid + 进程名校验。
 # 名称校验读 /proc/<pid>/cmdline 的 argv[0]（ldstatus 以 exec -a 改名）。
 ldstatus_running()
 {
     local ld_pid
-    ld_pid=$(cat "${CHROOT_DIR}/run/ldstatus/pid" 2>/dev/null | tr -cd '0-9')
+    ld_pid=$(ldstatus_pid)
     [ -n "${ld_pid}" ] || return 1
     [ -r "/proc/${ld_pid}/cmdline" ] || return 1
     tr '\0' ' ' < "/proc/${ld_pid}/cmdline" | grep -q ldstatus
@@ -404,30 +418,32 @@ chroot_exec()
         username="$2"
         shift 2
     fi
-    # 本项目固定使用 chroot 方式（unshare 暂不支持）
+    # 本项目固定使用 chroot 方式（unshare 暂不支持）。
+    # 所有 chroot 子进程统一关闭继承的 fd3（CLI exec 3>&1 保存的原始 stdout），
+    # 防止容器内后台化且不主动关 fd 的常驻进程（ldstatus 等）攥住调用方管道。
     if [ -n "${username}" ]; then
         if [ $# -gt 0 ]; then
             if [ -n "${shim_preload}" ]; then
                 # su 登录 shell 会清空环境变量，需在命令串里显式赋值
-                chroot ${METHOD_OPTIONS} "${CHROOT_DIR}" /bin/su - ${username} -c "${shim_preload} $*"
+                chroot ${METHOD_OPTIONS} "${CHROOT_DIR}" /bin/su - ${username} -c "${shim_preload} $*" 3>&-
             else
-                chroot ${METHOD_OPTIONS} "${CHROOT_DIR}" /bin/su - ${username} -c "$*"
+                chroot ${METHOD_OPTIONS} "${CHROOT_DIR}" /bin/su - ${username} -c "$*" 3>&-
             fi
         else
-            chroot ${METHOD_OPTIONS} "${CHROOT_DIR}" /bin/su - ${username}
+            chroot ${METHOD_OPTIONS} "${CHROOT_DIR}" /bin/su - ${username} 3>&-
         fi
     else
         if [ -n "${shim_preload}" ]; then
             # 导出变量让 chroot 内进程继承（ld.so 会在容器内解析该路径），
             # 只对本次 chroot 生效，执行完立即撤销
             export LD_PRELOAD="${shim_lib}"
-            PATH="${path}" chroot ${METHOD_OPTIONS} "${CHROOT_DIR}" "$@"
+            PATH="${path}" chroot ${METHOD_OPTIONS} "${CHROOT_DIR}" "$@" 3>&-
             local rc=$?
             unset LD_PRELOAD
             return ${rc}
         fi
         # 用 "$@" 保持参数边界，避免命令串被二次解析。
-        PATH="${path}" chroot ${METHOD_OPTIONS} "${CHROOT_DIR}" "$@"
+        PATH="${path}" chroot ${METHOD_OPTIONS} "${CHROOT_DIR}" "$@" 3>&-
     fi
 }
 
@@ -782,7 +798,7 @@ config_delete()
     else
         confirm_yes "确认删除该配置（容器目录数据保留）？" || { msg "已取消。"; return 1; }
     fi
-    rm -f "${conf_file}"
+    rm -f "${conf_file}" "${CONFIG_DIR}/${name}.ldstatus"
     msg "已删除配置: ${name}"
 }
 
@@ -1354,10 +1370,10 @@ container_nsenter_run()
     [ "${LD_NSENTER}" = "1" ] && return 1    # 已切入，防递归
     ldstatus_running || return 1             # 容器必须确认为运行中
     local ld_pid ns_bin
-    ld_pid=$(cat "${CHROOT_DIR}/run/ldstatus/pid" 2>/dev/null | tr -cd '0-9')
+    ld_pid=$(ldstatus_pid)
     [ -n "${ld_pid}" ] || return 1
     ns_bin=$(nsenter_bin) || { msg "[警告] 容器运行在其它挂载命名空间，但未找到可用的 nsenter"; return 1; }
-    msg "容器挂载位于其它命名空间（ldstatus pid ${ld_pid}），正在切入命名空间执行 ..."
+    msg "统一命名空间操作：经 ldstatus（pid ${ld_pid}）切入容器命名空间执行 ..."
     # 以 sh 显式解释器执行（直接 exec 时脚本 shebang 在目标命名空间不可解析）；
     # -c 显式指定当前配置名。
     LD_NSENTER=1 ${ns_bin} -t ${ld_pid} -m -- sh "${ENV_DIR}/cli.sh" -c "${CURRENT_CONF}" "$@" </dev/null
@@ -1393,11 +1409,12 @@ container_start()
 # 停止容器：执行组件停止后自动卸载全部挂载，一步到位。
 container_stop()
 {
+    # 统一命名空间操作：锚点有效（容器运行中）一律切入容器命名空间执行 stop，
+    # 不再区分当前命名空间是否可见挂载（同命名空间切入为安全空操作）
+    if [ "${LD_NSENTER}" != "1" ] && container_nsenter_run stop "$@"; then
+        return 0
+    fi
     if ! container_mounted; then
-        # 挂载不可见时尝试切入容器命名空间后重跑 stop（nsenter 实例中挂载可见）
-        if [ "${LD_NSENTER}" != "1" ] && container_nsenter_run stop "$@"; then
-            return 0
-        fi
         msg "容器未挂载，无需停止。"
         return 0
     fi
@@ -2527,8 +2544,8 @@ mount)
 umount)
     require_config
     log_open "${CURRENT_CONF:-umount}"
-    # 挂载不可见时尝试切入容器命名空间后卸载
-    if ! container_mounted && [ "${LD_NSENTER}" != "1" ] && container_nsenter_run umount; then
+    # 统一命名空间操作：锚点有效（容器运行中）一律切入容器命名空间执行卸载
+    if [ "${LD_NSENTER}" != "1" ] && container_nsenter_run umount; then
         exit 0
     fi
     container_umount

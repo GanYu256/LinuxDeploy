@@ -28,6 +28,21 @@ do_start()
     fi
     msg -n ":: 启动 ${COMPONENT} ... "
     chroot_exec /usr/local/sbin/ldstatus
+    local ld_rc=$?
+    # 等待容器内 pid 文件出现（≤3s），随后覆盖写入配置侧锚点
+    # <配置名>.ldstatus（任何命名空间可读，供 stop/umount/status 统一使用）
+    local i=0 anchor
+    while [ ${i} -lt 15 ] && [ ! -s "${CHROOT_DIR}/run/ldstatus/pid" ]; do
+        sleep 0.2
+        i=$((i+1))
+    done
+    if [ -s "${CHROOT_DIR}/run/ldstatus/pid" ] && [ -n "${CURRENT_CONF}" ]; then
+        anchor="${CONFIG_DIR}/${CURRENT_CONF}.ldstatus"
+        cp -f "${CHROOT_DIR}/run/ldstatus/pid" "${anchor}" 2>/dev/null
+        chmod 644 "${anchor}" 2>/dev/null
+    fi
+    # 恢复 chroot_exec 退出码供 is_ok 判定
+    [ ${ld_rc} -eq 0 ]
     is_ok "失败" "完成"
     return 0
 }
