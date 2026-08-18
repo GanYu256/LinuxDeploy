@@ -53,6 +53,7 @@ fun ConfigDetailScreen(
     onBack: () -> Unit,
     onEdit: () -> Unit,
     onToggleRunning: () -> Unit,
+    onStatusQuery: () -> Unit,
     onDeploy: () -> Unit,
     onTerminal: () -> Unit,
     onExport: () -> Unit,
@@ -158,6 +159,12 @@ fun ConfigDetailScreen(
                         title = "查看日志",
                         subtitle = "部署 / 启停等操作的实时输出",
                         onClick = onViewLogs,
+                    )
+                    HorizontalDivider()
+                    ActionRow(
+                        title = "状态查询",
+                        subtitle = "查询运行状态、组件与挂载详情（自动跳转日志页）",
+                        onClick = onStatusQuery,
                     )
                     HorizontalDivider()
                     ActionRow(

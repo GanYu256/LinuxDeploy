@@ -438,6 +438,19 @@ fun MainScreen(
         )
     }
 
+    /** 状态查询：CLI status 完整输出进日志页并自动跳转 */
+    fun statusConfig(cfg: ContainerConfig) {
+        launchCliOp(
+            label = "状态查询 ${cfg.name}",
+            op = { onLine ->
+                val result = CliManager.runCli(context, listOf("-c", cfg.name, "status"), onLine)
+                result.exitCode == 0
+            },
+            autoShowLog = true,
+            onSuccess = { refreshOneConfig(cfg.name) },
+        )
+    }
+
 
     /** 真正执行部署（CLI 长任务，输出实时进日志页） */
     fun doDeploy(cfg: ContainerConfig) {
@@ -799,6 +812,7 @@ fun MainScreen(
                         backToMain()
                         tab = 2
                     },
+                    onStatusQuery = { statusConfig(cfg) },
                     onDelete = { deleteTarget = detailName },
                     onDeleteContainer = { deleteContainerTarget = detailConfig },
                 )
@@ -837,6 +851,7 @@ fun MainScreen(
                     backToMain()
                     tab = 2
                 },
+                onStatusQuery = { statusConfig(it) },
                 onTerminalConfig = { pushRoute("terminal:${it.name}") },
                 onDeleteTarget = { deleteTarget = it.name },
             )
@@ -1036,6 +1051,7 @@ private fun MainTabScreen(
     onBannerClick: () -> Unit,
     onDeployConfig: (ContainerConfig) -> Unit,
     onViewLogs: () -> Unit,
+    onStatusQuery: (ContainerConfig) -> Unit,
     onTerminalConfig: (ContainerConfig) -> Unit,
     onDeleteTarget: (ContainerConfig) -> Unit,
 ) {
@@ -1119,6 +1135,7 @@ private fun MainTabScreen(
                     onEdit = onEditConfig,
                     onDeploy = onDeployConfig,
                     onLogs = { onViewLogs() },
+                    onStatusQuery = onStatusQuery,
                     onTerminal = onTerminalConfig,
                     onToggleAutostart = onToggleAutostart,
                     onDelete = onDeleteTarget,

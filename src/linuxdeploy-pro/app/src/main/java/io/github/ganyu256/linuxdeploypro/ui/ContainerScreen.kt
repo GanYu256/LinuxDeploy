@@ -77,6 +77,7 @@ fun ContainerScreen(
     onEdit: (ContainerConfig) -> Unit,
     onDeploy: (ContainerConfig) -> Unit,
     onLogs: (ContainerConfig) -> Unit,
+    onStatusQuery: (ContainerConfig) -> Unit,
     onTerminal: (ContainerConfig) -> Unit,
     onToggleAutostart: (ContainerConfig) -> Unit,
     onDelete: (ContainerConfig) -> Unit,
@@ -126,6 +127,7 @@ fun ContainerScreen(
                     onEdit = { onEdit(config) },
                     onDeploy = { onDeploy(config) },
                     onLogs = { onLogs(config) },
+                    onStatusQuery = { onStatusQuery(config) },
                     onTerminal = { onTerminal(config) },
                     onToggleAutostart = { onToggleAutostart(config) },
                     onDelete = { onDelete(config) },
@@ -146,6 +148,7 @@ private fun ContainerCard(
     onEdit: () -> Unit,
     onDeploy: () -> Unit,
     onLogs: () -> Unit,
+    onStatusQuery: () -> Unit,
     onTerminal: () -> Unit,
     onToggleAutostart: () -> Unit,
     onDelete: () -> Unit,
@@ -257,7 +260,7 @@ private fun ContainerCard(
                         .background(MiuixTheme.colorScheme.onSurface.copy(alpha = 0.04f))
                         .padding(8.dp),
                 ) {
-                    // 双排 2×2 操作网格：第一排 终端/开机自启，第二排 部署/删除配置
+                    // 双排操作网格：第一排 终端/开机自启/状态查询，第二排 部署/删除配置
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         MenuGridButton("终端", Icons.Filled.Edit, onTerminal, Modifier.weight(1f))
                         MenuGridButton(
@@ -267,6 +270,7 @@ private fun ContainerCard(
                             Modifier.weight(1f),
                             active = config.name in autostart,
                         )
+                        MenuGridButton("状态查询", Icons.Filled.Info, onStatusQuery, Modifier.weight(1f))
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
