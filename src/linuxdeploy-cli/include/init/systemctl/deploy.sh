@@ -42,6 +42,11 @@ do_start()
     msg -n ":: 启动 ${COMPONENT} ... "
     [ -x "${CHROOT_DIR}/usr/bin/systemctl" ] || { msg "失败（/usr/bin/systemctl 未安装，请重新部署）"; return 1; }
     make_dirs /run/systemctl
+    # 拉起 init 前确保 ssh.service 已 enable：systemctl 的 default.target 才会
+    # 启动 sshd（openssh 安装时未必 enable；此处兜底覆盖任何顺序/老容器）
+    if [ -e "${CHROOT_DIR}/usr/lib/systemd/system/ssh.service" ] || [ -e "${CHROOT_DIR}/lib/systemd/system/ssh.service" ]; then
+        chroot_exec /usr/bin/systemctl enable ssh.service 2>/dev/null || true
+    fi
     # 以 init 服务方式拉起并常驻：setsid 脱离宿主会话；--init 进入 init 模式
     # （拉起 default.target 服务 → 阻塞 init 循环收僵尸、等 SIGTERM/SIGINT 干净停机）。
     # pid 由 setsid 子 shell 写入容器 /run/systemctl/pid（容器磁盘，跨挂载命名空间可见）。
