@@ -50,7 +50,10 @@ do_start()
     # 以 init 服务方式拉起并常驻：setsid 脱离宿主会话；--init 进入 init 模式
     # （拉起 default.target 服务 → 阻塞 init 循环收僵尸、等 SIGTERM/SIGINT 干净停机）。
     # pid 由 setsid 子 shell 写入容器 /run/systemctl/pid（容器磁盘，跨挂载命名空间可见）。
-    chroot_exec /bin/sh -c 'setsid /bin/sh -c '\''echo $$ > /run/systemctl/pid; exec /usr/bin/systemctl --init'\'' </dev/null >/dev/null 2>&1 &'
+    # 注意：必须先注入容器登录级环境（HOME/PATH/USER 等）——systemctl 会把自身环境
+    # 原样传给其拉起的全部服务，CLI 侧 HOME 指向临时目录、PATH 为宿主路径，
+    # 会导致 KDE 等读取无效 HOME（加载默认配置）、unchroot 等命令找不到。
+    chroot_exec /bin/sh -c 'export HOME=/root USER=root LOGNAME=root SHELL=/bin/bash PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; setsid /bin/sh -c '\''echo $$ > /run/systemctl/pid; exec /usr/bin/systemctl --init'\'' </dev/null >/dev/null 2>&1 &'
     is_ok "失败" "完成"
     return 0
 }
