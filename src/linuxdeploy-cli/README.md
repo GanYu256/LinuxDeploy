@@ -1,6 +1,6 @@
-# Linux Deploy CLI 4.1.13
+# Linux Deploy CLI 4.1.15
 
-> 维护：GanYu256 | 全中文日志 | 配置切换即锁定 | 只维护 arm64
+> 维护：GanYu256 | 全中文日志 | 无配置锁（统一 -c 指定配置） | 只维护 arm64
 
 Linux Deploy CLI 是 LinuxDeploy-Pro 的命令行工具，提供 chroot 容器核心能力
 （构建、挂载、启动、停止、导入导出），命令层、配置管理与安全机制统一设计，
@@ -11,9 +11,9 @@ Linux Deploy CLI 是 LinuxDeploy-Pro 的命令行工具，提供 chroot 容器�
 ## 版本沿革
 
 - 基线：app 锁定版 `79924f593556`（VERSION 2.5.1）
-- 4.0：全面重构——命令层重设计、配置切换即锁定、安全护栏、中文日志
-- 4.1.x：运行状态检测改为容器内 ldstatus 标记进程（跨 su 命名空间可靠）、
-  版本号统一（当前 4.1.13）
+- 4.0：全面重构——命令层重设计、安全护栏、中文日志
+- 4.1.x：无配置锁（统一 -c 指定配置）、运行状态检测改为容器内 ldstatus 标记进程
+  与配置侧锚点（跨命名空间可靠）、systemctl 初始化模式、版本号统一（当前 4.1.15）
 - 设计文档：[docs/设计说明.md](docs/设计说明.md)
 
 ## 环境要求
@@ -61,17 +61,16 @@ Linux Deploy CLI 是 LinuxDeploy-Pro 的命令行工具，提供 chroot 容器�
 
 配置命令:
   config list                    列出全部配置
-  config show [名称]             显示当前（或指定）配置详情
-  config use <名称>              切换当前配置（锁定）
-  config create <名称> [--k=v]   新建配置并自动切换（自动隔离容器目录）
-  config edit [--k=v ...]        修改当前配置参数
+  config show [名称]             显示配置详情（名称或 -c 指定）
+  config create <名称> [--k=v]   新建配置（自动隔离容器目录）
+  config edit [--k=v ...]        修改 -c 指定配置参数
   config copy <源> <新名称>      复制配置
   config delete <名称> [--purge] 删除配置（--purge 连同容器目录删除）
-  config export <文件>           导出当前配置
+  config export <文件>           导出 -c 指定配置
   config import <文件|名称>      导入配置（自动隔离容器目录）
 
 容器命令:
-  deploy [--dry-run] [--yes] [--keep-mounted] [--k=v]  部署当前配置（含安全护栏与确认）
+  deploy [--dry-run] [--yes] [--keep-mounted] [--k=v]  部署 -c 指定配置（含安全护栏与确认）
   start                           启动容器（自动挂载系统文件与 MOUNTS 自定义挂载点）
   stop                            停止容器（自动卸载全部挂载）
   status                          查看容器状态（--json 输出机器可读结果）
@@ -79,16 +78,17 @@ Linux Deploy CLI 是 LinuxDeploy-Pro 的命令行工具，提供 chroot 容器�
   check                           自检环境与配置（--json 输出结构化结果）
 
 rootfs 命令:
-  import <归档|URL>               导入 rootfs 到当前容器
-  export <归档>                   导出当前容器为 rootfs 归档
+  import <归档|URL>               导入 rootfs 到 -c 指定容器
+  export <归档>                   导出 -c 指定容器为 rootfs 归档
   mount                           挂载容器
   umount                          卸载容器
 ```
 
 ## 行为说明
 
-- **切换即锁定**：`config use <名称>` 切换当前配置，后续所有命令只作用于该配置。
-  任何命令输出顶部都会显示当前配置名称，避免误操作。
+- **显式指定配置（-c）**：无配置锁，所有容器操作命令通过 `-c <配置名>` 显式指定
+  操作配置；未带 `-c` 时容器操作命令拒绝执行并提示。任何命令输出顶部都会
+  显示操作配置名称与容器目录，避免误操作。
 - **部署后自动卸载**：`deploy` 成功默认卸载容器挂载（可用 `--keep-mounted` 保留）；
   失败时也会清理残留挂载，保证容器目录不被占用。
 - **启动即挂载、停止即卸载**：`start` 自动挂载 proc/sys/dev 等系统文件，
@@ -97,7 +97,7 @@ rootfs 命令:
 - **运行状态检测**：容器内 `ldstatus` 标记进程（`/run/ldstatus/pid`）作为运行
   标记，`status` 据此判断 running，跨 su 命名空间可靠；`mounted` 表示当前
   命名空间内可见的挂载状态，二者独立输出。
-- **JSON 协议**：`--json config current/list/show`、`--json check`、`--json status`
+- **JSON 协议**：`--json config list/show`、`--json check`、`--json status`
   均输出机器可读结果，供 APK 前端解析。
 
 ## 变更日志
@@ -116,7 +116,7 @@ rootfs 命令:
 ### 4.0（2026-08）
 
 - 命令层重构：`config` 子命令统一、`check` 自检、`--json` 协议输出
-- 配置切换即锁定，杜绝误读其他配置导致清空工作区
+- 无配置锁：容器操作统一 `-c <配置名>` 指定，杜绝误操作其他配置
 - 中文日志全面落地；debootstrap / apt 输出流式写入日志文件
 - 修复 `chroot_exec` 参数二次解析 bug（含 `;`/`|` 的命令串不再挂起）
 - `shell` 自动补齐 `/proc` 等虚拟文件系统挂载；支持 `shell -c` 直接执行命令
@@ -126,7 +126,7 @@ rootfs 命令:
 - 实测构建成功：Debian 13 (trixie)、Alpine 3.24、Arch Linux (aarch64)、
   Kali 2026.3、Ubuntu 24.04（arm64，清华/阿里镜像源）
 
-执行任意命令时，输出顶部都会显示**当前配置名称与容器目录**，时刻提醒你操作对象。
+执行任意命令时，输出顶部都会显示**操作配置名称与容器目录**，时刻提醒你操作对象。
 
 ## 配置参数（`--key=value` 形式）
 
@@ -161,11 +161,11 @@ rootfs 命令:
 
 ## 配置管理机制
 
-### 切换即锁定
+### 显式指定配置（-c）
 
-- 当前配置名持久化在 `config/.current`，每次运行自动读取；
-- `config use <名称>` 切换后即锁定，后续所有命令只作用于该配置；
-- 操作对象由 `.current` 显式确定，避免误操作。
+- 无配置锁：所有容器操作命令通过 `-c <配置名>` 显式指定操作配置；
+- 未带 `-c` 时容器操作命令拒绝执行并提示；
+- 操作对象由 `-c` 显式确定，避免误操作。
 
 ### 配置隔离
 
@@ -213,7 +213,7 @@ include/
 linuxdeploy/               项目根
 ├── src/linuxdeploy-cli/   CLI 源码（本仓库）
 │   ├── cli.sh             主入口
-│   ├── config/            配置（.conf 与 .current）
+│   ├── config/            配置（.conf 与 .ldstatus 锚点）
 │   ├── include/           组件库
 │   ├── tmp/               临时文件
 │   ├── statx_shim.c       构建期 statx 兼容层源码
