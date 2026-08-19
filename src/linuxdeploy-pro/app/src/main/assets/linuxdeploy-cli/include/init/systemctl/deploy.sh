@@ -6,6 +6,14 @@
 # default.target 下的服务（含 sysv-generator 转换的 init.d 脚本与 enable 的
 # systemd 服务）；停止时向 systemctl 进程发 SIGTERM 触发干净停机。
 # 注意：不管理 ldstatus（其位于 /usr/local/sbin，非 init.d/unit，天然隔离）。
+#
+# 已知注意事项（真机实测，2026-08）：
+# systemctl.py 拉起服务时会把其 stdin/stdout/stderr 全部 dup2 重定向到
+# journal 日志文件。服务脚本内若调用 app_process 类工具（如安卓宿主侧的
+# am/app_process 等，经 unchroot 执行），binder 调用会因此失败
+# （"Failed transaction"），表现为"命令执行了但无效果"。
+# 规避：脚本内调用此类工具时显式重定向 stdio 并脱离进程树，例如：
+#   setsid /sbin/unchroot am start <pkg>/<Activity> </dev/null >/dev/null 2>&1 &
 
 # systemctl 常驻进程检查：读容器内 pid 文件 + /proc/<pid>/cmdline 校验进程名
 systemctl_running()
