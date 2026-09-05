@@ -1852,10 +1852,13 @@ check_sane_mount () {
 		  lxc|lxc-libvirt|mmdebstrap-unshare)
 		    ;;
 		  *)
-		    if ! mknod "$1/test-dev-null" c 1 3 2>/dev/null ||
-		       ! echo test > "$1/test-dev-null"; then
-			# mknod failed (e.g. user namespace) or writing failed
-			# (e.g. nodev). Try if bind-mounting works
+		    # 本地适配（Android）：mknod 成功即认为文件系统支持设备节点，
+		    # 不再测试向节点写入——部分设备的 su 进程受设备 cgroup 限制，
+		    # 写入新建节点会被拒（与目标目录无关），触发 bind 兜底后又因
+		    # toybox losetup 缺 -s 而失败，误报"mounted with noexec"。
+		    # 仅当 mknod 失败（nodev / user namespace）时才走 bind 兜底。
+		    if ! mknod "$1/test-dev-null" c 1 3 2>/dev/null; then
+			# mknod failed (e.g. user namespace). Try if bind-mounting works
 			touch "$1/test-dev-null"
 			if ! mount -o bind /dev/null "$1/test-dev-null"; then
 			    rm -f "$1/test-dev-null"
