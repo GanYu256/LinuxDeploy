@@ -1336,7 +1336,17 @@ setup_devices () {
 	    *)
 		if ! setup_devices_simple ||
 		   !  sh -c ': >"$1"' -- "$TARGET/dev/null" 2>/dev/null; then
-			setup_devices_bind
+			if ! setup_devices_bind; then
+			    # 本地适配（Android）：mknod（setup_devices_simple）已成功创建设备节点时，
+			    # 仅“写入验证/绑定”受限（设备 cgroup / toybox losetup 缺 -s）不视为致命——
+			    # LinuxDeploy 二阶段前会用宿主 /dev bind 覆盖 target/dev。节点本身无法创建
+			    # （nodev）时才失败。
+			    if [ -e "$TARGET/dev/null" ]; then
+				warning SETUP_DEVICES "设备节点已创建但写入/绑定受限（设备 cgroup），继续（二阶段将 bind 宿主 /dev）"
+			    else
+				return 1
+			    fi
+			fi
 		fi
 		;;
 	esac
