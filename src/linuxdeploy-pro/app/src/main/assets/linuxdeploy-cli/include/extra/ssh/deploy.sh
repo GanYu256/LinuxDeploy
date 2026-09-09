@@ -52,10 +52,8 @@ do_configure()
     if [ -z "$(ls "${CHROOT_DIR}/etc/ssh/" 2>/dev/null | grep 'key$')" ]; then
         chroot_exec -u root ssh-keygen -A >/dev/null 2>&1 || true
     fi
-    # systemctl 模式：把 ssh.service 设为默认启用，交由 systemctl 的 default.target 拉起
-    if [ "${INIT}" = "systemctl" ]; then
-        chroot_exec /usr/bin/systemctl enable ssh.service 2>/dev/null || true
-    fi
+    # 注：ssh.service 的 enable 由 init/systemctl 组件在 start 拉起 --init 前统一执行，
+    # 此处不再调用 python systemctl（部署期调用曾导致进程异常终止）。
     return 0
 }
 
@@ -72,8 +70,6 @@ do_start()
         if [ -z "$(ls "${CHROOT_DIR}/etc/ssh/" 2>/dev/null | grep 'key$')" ]; then
             chroot_exec -u root ssh-keygen -A >/dev/null 2>&1 || true
         fi
-        # 兜底：确保已 enable（覆盖部署早于本版本的容器）
-        chroot_exec /usr/bin/systemctl enable ssh.service 2>/dev/null || true
         msg "跳过（systemctl 模式：ssh 由 systemctl 管理，端口 ${SSH_PORT} 已写入 sshd_config）"
         return 0
     fi
