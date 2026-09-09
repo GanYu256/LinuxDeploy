@@ -2908,6 +2908,40 @@ class SystemctlListenThread(threading.Thread):
                 logg.warning("[%s] listen: close socket >> %s", me, e)
         return
 
+# ---------------------------------------------------------------------------
+# 颜色模拟（拟真 systemd 输出）
+# 仅在 stdout 是终端且未设置 NO_COLOR 时上色，重定向/管道时保持纯文本，
+# 与真 systemd 的行为一致。
+# ---------------------------------------------------------------------------
+_COLOR_RESET = "\033[0m"
+_COLOR_RED = "\033[31m"
+_COLOR_GREEN = "\033[32m"
+_COLOR_YELLOW = "\033[33m"
+
+def _use_color() -> bool:
+    """是否启用颜色：终端输出且未显式禁用。"""
+    try:
+        return bool(sys.stdout.isatty()) and not os.environ.get("NO_COLOR")
+    except Exception:
+        return False
+
+def _color(text: str, code: str) -> str:
+    """按 ANSI 颜色码包裹文本，非终端时原样返回。"""
+    if not code or not _use_color():
+        return text
+    return code + text + _COLOR_RESET
+
+def _state_color(state: str) -> str:
+    """映射 systemd 状态到颜色：active/loaded/enabled 绿，failed/masked 红，
+    过渡中（activating/deactivating/reloading）黄，其余无色。"""
+    if state in ("active", "loaded", "enabled"):
+        return _COLOR_GREEN
+    if state in ("failed", "masked"):
+        return _COLOR_RED
+    if state in ("activating", "deactivating", "reloading"):
+        return _COLOR_YELLOW
+    return ""
+
 class Systemctl:
     """ emulation for systemctl commands """
     error: int
@@ -5466,7 +5500,9 @@ class Systemctl:
         if loaded:
             filename = str(conf.filename())
             enabled = self.enabled_from(conf)
-            result += F"\n    Loaded: {loaded} ({filename}, {enabled})"
+            loaded_show = _color(loaded, _state_color(loaded))
+            enabled_show = _color(enabled, _state_color(enabled))
+            result += F"\n    Loaded: {loaded_show} ({filename}, {enabled_show})"
             for path in conf.overrides():
                 result += F"\n    Drop-In: {path}"
         else:
@@ -5474,7 +5510,8 @@ class Systemctl:
             return 3, result
         active = self.get_active_from(conf)
         substate = self.get_substate_from(conf)
-        result += F"\n    Active: {active} ({substate})"
+        active_show = _color(active, _state_color(active))
+        result += F"\n    Active: {active_show} ({substate})"
         if active == "active":
             return 0, result
         else:

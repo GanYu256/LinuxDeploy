@@ -2315,11 +2315,18 @@ deploy)
 
     # 安全护栏：目标目录非空检查（防止覆盖已有工作环境）
     if [ -d "${CHROOT_DIR}" ] && [ -n "$(ls -A "${CHROOT_DIR}" 2>/dev/null)" ]; then
-        msg "安全护栏: 目标目录非空: ${CHROOT_DIR}"
         if [ "${yes_mode}" = "true" ]; then
-            msg "已指定 --yes，继续执行（风险由用户承担）。"
+            msg "安全护栏: 目标目录非空，强制部署将清空后全新安装: ${CHROOT_DIR}"
         else
-            confirm_yes "目标目录非空，继续将混入/覆盖已有文件，是否继续？" || { msg "已取消部署。"; exit 1; }
+            confirm_yes "目标目录非空，部署将清空该目录后全新安装（残留数据/半截缓存会丢失），是否继续？" || { msg "已取消部署。"; exit 1; }
+        fi
+        # 清空目录内容（保留目录本身）：清除半截 debootstrap 缓存/残留，
+        # 避免脏目录复用损坏缓存导致"光速报错"（强制部署 = 清空后全新部署）
+        if [ -n "${CHROOT_DIR}" ] && [ "${CHROOT_DIR}" != "/" ]; then
+            msg "正在清空目标目录: ${CHROOT_DIR}"
+            find "${CHROOT_DIR}" -mindepth 1 -delete 2>/dev/null || {
+                rm -rf "${CHROOT_DIR:?}/"* "${CHROOT_DIR:?}/".[!.]* 2>/dev/null || true
+            }
         fi
     fi
 

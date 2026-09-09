@@ -111,9 +111,10 @@ fun LogScreen(
     val displayLogs = if (showingFile) fileLines else logs
     val fullText = remember(displayLogs.size) { displayLogs.joinToString("\n") }
 
-    // 新日志到达（条数变化）时自动滚到底部，模拟终端输出跟屏；
-    // 先等一帧让布局完成，再按当前最大滚动位置落底。
-    LaunchedEffect(displayLogs.size) {
+    // 新日志到达（条数或末行变化）时自动滚到底部，模拟终端输出跟屏；
+    // 键含末行内容：文件整体重读/末行替换时同样触发（仅 size 变化在
+    // 重读场景下不触发，导致最后一行藏在视口下方）。
+    LaunchedEffect(displayLogs.size, displayLogs.lastOrNull()) {
         if (displayLogs.isNotEmpty()) {
             withFrameNanos { }
             scrollState.scrollTo(scrollState.maxValue)
