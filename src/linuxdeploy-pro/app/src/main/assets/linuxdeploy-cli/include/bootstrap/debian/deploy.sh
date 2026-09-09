@@ -120,6 +120,13 @@ do_install()
     # 挂载核心虚拟文件系统，准备二阶段
     component_exec core/emulator core/mnt core/net
 
+    # 二阶段前确保 /dev 为宿主 bind：部分设备（如 k pad）一阶段 mknod 的
+    # 设备节点带数据目录 SELinux 标签，无法作为设备打开，debootstrap 自身的
+    # /dev/null 重定向会 Permission denied（二阶段退出时会卸载，随后补挂）
+    if ! is_mounted "${CHROOT_DIR}/dev"; then
+        container_mount dev shm pts || true
+    fi
+
     # 二阶段：在 chroot 内完成包配置
     unset DEBOOTSTRAP_DIR
     rc_file=$(mktemp) || return 1
