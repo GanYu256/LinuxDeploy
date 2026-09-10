@@ -27,8 +27,9 @@ else
 fi
 UNCHROOT_EOF
     chmod 755 "${unchroot}"
-    # 同时接管容器内 reboot 家族（依赖刚写入的 /sbin/unchroot）
+    # 同时接管容器内 reboot 家族与看门狗（均依赖刚写入的 /sbin/unchroot）
     ld_install_reboot_override
+    ld_install_watchdog
     return 0
 }
 
@@ -89,7 +90,107 @@ STOP_EOF
 
 do_start()
 {
-    # 每次启动幂等重置 reboot 家族接管（防 apt 升级还原软链）
+    # 每次启动幂等重置 reboot 家族接管（防 apt 升级还原软链）与看门狗注入
     ld_install_reboot_override
+    ld_install_watchdog
+    return 0
+}
+
+# 注入容器内看门狗：由 systemctl 作为服务拉起，反向监视 init（systemctl --init）存活。
+# 形态：
+#   脚本   /usr/local/sbin/ldwatchdog
+#   服务   /etc/systemd/system/ldwatchdog.service（Restart=always + RestartSec=1s）
+# 分工（相互守护，不成环）：
+#   - systemctl 守护看门狗：看门狗进程意外退出 → systemctl 按 Restart=always 拉回；
+#   - 看门狗监视 init：init 非正常消失（被 OOM/信号杀死等）→ 无人在容器内能拉起它，
+#     于是经 unchroot 到宿主侧执行 cli.sh restart（stop + 3 秒 + start），
+#     由 CLI 把整个容器用户空间换新（新 init 会重新拉起本看门狗）。
+# 判活：主通道读 /run/systemctl/pid（CLI 拉起 init 时写入，已修复该文件此前不被创建的问题），
+#       并校验 cmdline 含 systemctl；主通道不可用时兜底扫描本容器内的 systemctl --init
+#       （容器内视角下 root 为 "/" 的进程属于本容器）。连续 2 次判定消失才触发（去抖）。
+# 防误触发：正常停机时 systemctl 会先给服务发 SIGTERM，这里 trap 后直接退出、绝不触发。
+# 覆盖不到：init 与看门狗同时死（整个会话被杀）→ 只能手动 reboot 或 App 启停。
+ld_install_watchdog()
+{
+    # 仅在 systemctl 模式容器里有意义（服务由 systemctl 拉起）
+    [ "${INIT}" = "systemctl" ] || return 0
+    [ -x "${CHROOT_DIR}/sbin/unchroot" ] || return 0
+    [ -e "${CHROOT_DIR}/usr/bin/systemctl" ] || return 0
+    [ -n "${ENV_DIR}" ] && [ -n "${CURRENT_CONF}" ] || return 0
+    local marker="LD-WATCHDOG-v1"
+    local script="${CHROOT_DIR}/usr/local/sbin/ldwatchdog"
+    local unit="${CHROOT_DIR}/etc/systemd/system/ldwatchdog.service"
+    local changed=0
+    if ! grep -q "${marker}" "${script}" 2>/dev/null; then
+        make_dirs "${CHROOT_DIR}/usr/local/sbin"
+        cat > "${script}" << WATCHDOG_EOF
+#!/bin/sh
+# Linux Deploy 容器内看门狗：监视 init（systemctl --init）存活，异常消失则触发容器重启。
+# 正常停机由 systemctl 先发 SIGTERM，本脚本 trap 后直接退出、不触发。
+# ${marker}
+INIT_PID_FILE=/run/systemctl/pid
+INTERVAL=2
+DEBOUNCE=2
+trap 'exit 0' TERM INT
+log() { echo "[ldwatchdog] \$(date '+%F %T') \$*"; }
+# 取当前 init 的 pid：主通道 pid 文件（校验进程名），兜底扫描本容器的 systemctl --init
+init_pid() {
+    local p a
+    p=\$(cat "\${INIT_PID_FILE}" 2>/dev/null | tr -cd '0-9')
+    if [ -n "\${p}" ] && [ -r "/proc/\${p}/cmdline" ]; then
+        a=\$(tr '\0' ' ' < "/proc/\${p}/cmdline" 2>/dev/null)
+        case "\${a}" in *systemctl*) echo "\${p}"; return 0 ;; esac
+    fi
+    for d in /proc/[0-9]*; do
+        [ "\$(readlink "\${d}/root" 2>/dev/null)" = "/" ] || continue
+        a=\$(tr '\0' ' ' < "\${d}/cmdline" 2>/dev/null)
+        case "\${a}" in *"/usr/bin/systemctl --init"*|*"systemctl --init"*) echo "\${d#/proc/}"; return 0 ;; esac
+    done
+    return 1
+}
+log "启动，监视 init（pid 文件 \${INIT_PID_FILE}，间隔 \${INTERVAL}s，去抖 \${DEBOUNCE} 次）"
+fails=0
+while :; do
+    sleep "\${INTERVAL}"
+    if init_pid >/dev/null; then
+        fails=0
+        continue
+    fi
+    fails=\$((fails + 1))
+    log "未发现 init（连续 \${fails} 次）"
+    [ "\${fails}" -ge "\${DEBOUNCE}" ] || continue
+    log "init 已消失，触发容器重启：cli.sh -c ${CURRENT_CONF} restart"
+    if [ -x /sbin/unchroot ]; then
+        setsid sh /sbin/unchroot /system/bin/sh -c 'exec /system/bin/sh ${ENV_DIR}/cli.sh -c ${CURRENT_CONF} restart' </dev/null >/dev/null 2>&1 &
+    else
+        log "缺少 /sbin/unchroot，无法触发重启"
+    fi
+    # 闭锁：等待宿主侧 restart 把整个容器用户空间换掉，期间不再重复触发
+    while :; do sleep 60; done
+done
+WATCHDOG_EOF
+        chmod 755 "${script}"
+        changed=1
+    fi
+    if ! grep -q "${marker}" "${unit}" 2>/dev/null; then
+        make_dirs "${CHROOT_DIR}/etc/systemd/system"
+        cat > "${unit}" << UNIT_EOF
+[Unit]
+Description=Linux Deploy init watchdog (container)
+After=sysinit.target
+# ${marker}
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/ldwatchdog
+Restart=always
+RestartSec=1s
+
+[Install]
+WantedBy=multi-user.target
+UNIT_EOF
+        changed=1
+    fi
+    [ "${changed}" = "1" ] && msg ":: 已注入容器内看门狗（ldwatchdog.service：监视 init，异常时触发容器重启）"
     return 0
 }

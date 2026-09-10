@@ -88,6 +88,12 @@ do_start()
 RestartSec=1s
 RESTARTSEC
     fi
+    # 看门狗随 init 启动：ldwatchdog.service 由 core/unchroot 组件注入，这里兜底 enable
+    # （enable 后 --init 会在 default.target 里拉起看门狗；看门狗反向监视 init 存活，
+    #  init 异常消失时经 unchroot 触发宿主侧 cli.sh restart）
+    if [ -e "${CHROOT_DIR}/etc/systemd/system/ldwatchdog.service" ]; then
+        chroot_exec /usr/bin/systemctl enable ldwatchdog.service 2>/dev/null || true
+    fi
     # 以 init 服务方式拉起并常驻：setsid 脱离宿主会话；--init 进入 init 模式
     # （拉起 default.target 服务 → 阻塞 init 循环收僵尸、等 SIGTERM/SIGINT 干净停机）。
     # pid 由 setsid 子 shell 写入容器 /run/systemctl/pid（容器磁盘，跨挂载命名空间可见）。
