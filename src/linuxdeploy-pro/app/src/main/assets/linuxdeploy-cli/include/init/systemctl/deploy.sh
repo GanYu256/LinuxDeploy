@@ -53,6 +53,22 @@ do_start()
     fi
     msg -n ":: 启动 ${COMPONENT} ... "
     [ -x "${CHROOT_DIR}/usr/bin/systemctl" ] || { msg "失败（/usr/bin/systemctl 未安装，请重新部署）"; return 1; }
+    # 二进制刷新：打包的 systemctl.py 与容器内的不一致时覆盖。
+    # 目的：APK 更新后只需"重启容器"即可让 CLI 侧修复生效（无需重装运行环境）。
+    # 安全性：此处已确认 init 未运行（上面 systemctl_running 为假才走到这里），
+    # 覆盖文件不会被正在运行的 python 占用。cmp 不可用时退化为无条件覆盖。
+    local sysctl_src="${INCLUDE_DIR}/init/systemctl/systemctl.py"
+    if [ -f "${sysctl_src}" ]; then
+        local need_refresh=1
+        if command -v cmp >/dev/null 2>&1; then
+            cmp -s "${sysctl_src}" "${CHROOT_DIR}/usr/bin/systemctl" && need_refresh=0
+        fi
+        if [ "${need_refresh}" = "1" ]; then
+            cp -f "${sysctl_src}" "${CHROOT_DIR}/usr/bin/systemctl"
+            chmod 755 "${CHROOT_DIR}/usr/bin/systemctl"
+            msg ":: 已刷新容器内 systemctl（与打包版本不一致）"
+        fi
+    fi
     # 修复：同上，pid 目录必须落在容器内，init 才能成功写 /run/systemctl/pid
     # （systemctl_running()/do_stop 都依赖该文件，缺失会导致重复拉起 init）
     make_dirs "${CHROOT_DIR}/run/systemctl"
