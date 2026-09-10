@@ -27,5 +27,63 @@ else
 fi
 UNCHROOT_EOF
     chmod 755 "${unchroot}"
+    # 同时接管容器内 reboot 家族（依赖刚写入的 /sbin/unchroot）
+    ld_install_reboot_override
+    return 0
+}
+
+# 接管容器内 poweroff 家族（容器内无关机语义）：
+#   reboot → 伪重启：经 unchroot 到宿主侧执行 cli.sh restart（结束容器进程并重新拉起
+#            用户空间），不卸载挂载、不重启手机。
+#            注意 Debian 下 /usr/sbin/reboot 是指向 ../bin/systemctl 的软链，必须
+#            “先删链再写脚本”，否则只是改链接目标、等于没接管。
+#   halt/poweroff/shutdown → 统一改为提示并返回失败。原样保留很危险：
+#            systemctl halt 会停掉容器全部服务（SSH 断）却既不卸载也不重启，
+#            容器直接变僵尸态。
+# do_start 每次幂等重放：apt 升级可能把软链装回来。
+ld_install_reboot_override()
+{
+    [ -x "${CHROOT_DIR}/sbin/unchroot" ] || return 0
+    [ -n "${ENV_DIR}" ] && [ -n "${CURRENT_CONF}" ] || return 0
+    local reboot="${CHROOT_DIR}/usr/sbin/reboot"
+    if [ -L "${reboot}" ] || ! grep -q "Linux Deploy 容器内 reboot" "${reboot}" 2>/dev/null; then
+        make_dirs "${CHROOT_DIR}/usr/sbin"
+        rm -f "${reboot}"
+        cat > "${reboot}" << REBOOT_EOF
+#!/bin/sh
+# Linux Deploy 容器内 reboot：触发容器伪重启（结束容器进程并重新拉起用户空间）。
+# 不卸载挂载、不重启手机；实际动作由宿主侧 CLI 的 restart 子命令完成。
+if [ ! -x /sbin/unchroot ]; then
+    echo "reboot: 缺少 /sbin/unchroot，无法触发容器重启" >&2
+    exit 1
+fi
+setsid sh /sbin/unchroot /system/bin/sh -c 'exec /system/bin/sh ${ENV_DIR}/cli.sh -c ${CURRENT_CONF} restart' </dev/null >/dev/null 2>&1 &
+exit 0
+REBOOT_EOF
+        chmod 755 "${reboot}"
+        msg ":: 已接管容器内 reboot（伪重启 → 宿主侧 cli.sh -c ${CURRENT_CONF} restart）"
+    fi
+    local tool tool_file
+    for tool in halt poweroff shutdown
+    do
+        tool_file="${CHROOT_DIR}/usr/sbin/${tool}"
+        if [ -L "${tool_file}" ] || ! grep -q "容器内不支持关机" "${tool_file}" 2>/dev/null; then
+            make_dirs "${CHROOT_DIR}/usr/sbin"
+            rm -f "${tool_file}"
+            cat > "${tool_file}" << STOP_EOF
+#!/bin/sh
+echo "${tool}: 容器内不支持关机操作；如需重启容器请执行 reboot" >&2
+exit 1
+STOP_EOF
+            chmod 755 "${tool_file}"
+        fi
+    done
+    return 0
+}
+
+do_start()
+{
+    # 每次启动幂等重置 reboot 家族接管（防 apt 升级还原软链）
+    ld_install_reboot_override
     return 0
 }
