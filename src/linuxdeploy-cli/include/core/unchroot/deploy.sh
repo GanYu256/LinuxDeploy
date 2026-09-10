@@ -46,17 +46,23 @@ ld_install_reboot_override()
     [ -x "${CHROOT_DIR}/sbin/unchroot" ] || return 0
     [ -n "${ENV_DIR}" ] && [ -n "${CURRENT_CONF}" ] || return 0
     local reboot="${CHROOT_DIR}/usr/sbin/reboot"
-    if [ -L "${reboot}" ] || ! grep -q "Linux Deploy 容器内 reboot" "${reboot}" 2>/dev/null; then
+    # 内容版本标记：脚本内容变化时递增，保证已注入过的容器也会被重写
+    #（只判断“是否我们写的”会让旧内容永远不被更新）
+    local marker="LD-REBOOT-OVERRIDE-v2"
+    if [ -L "${reboot}" ] || ! grep -q "${marker}" "${reboot}" 2>/dev/null; then
         make_dirs "${CHROOT_DIR}/usr/sbin"
         rm -f "${reboot}"
         cat > "${reboot}" << REBOOT_EOF
 #!/bin/sh
 # Linux Deploy 容器内 reboot：触发容器重启（宿主侧 cli.sh restart = stop + 3 秒 + start）。
 # 不重启手机；容器配置名在部署/启动时已写死，这里不做任何判断。
+# ${marker}
 if [ ! -x /sbin/unchroot ]; then
     echo "reboot: 缺少 /sbin/unchroot，无法触发容器重启" >&2
     exit 1
 fi
+echo "正在重新启动容器（${CURRENT_CONF}）... 容器将停止约 40 秒后自动恢复，SSH 会话会断开"
+sync 2>/dev/null || true
 setsid sh /sbin/unchroot /system/bin/sh -c 'exec /system/bin/sh ${ENV_DIR}/cli.sh -c ${CURRENT_CONF} restart' </dev/null >/dev/null 2>&1 &
 exit 0
 REBOOT_EOF
