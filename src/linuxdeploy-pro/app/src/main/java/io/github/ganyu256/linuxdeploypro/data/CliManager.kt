@@ -35,6 +35,13 @@ object CliManager {
     /** CLI 版本（与 cli.sh 内 VERSION 对应，仅用于日志显示） */
     const val CLI_VERSION = "4.0"
 
+    /**
+     * 进程退出后等待输出读取线程收尾的时间（毫秒）。
+     * CLI 派生的守护进程可能继承 stdout 管道，读取端等不到 EOF；
+     * 主流程以进程退出为准，这里只给一个很短的窗口把已缓冲输出取完。
+     */
+    private const val DRAIN_MS = 500L
+
     /** 本次进程内是否已确认 root 可用（避免每次操作都反复探测） */
     @Volatile
     private var rootReady: Boolean? = null
@@ -227,14 +234,28 @@ object CliManager {
                 process.outputStream.close()
             }
             val output = StringBuilder()
-            process.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
-                lines.forEach { line ->
-                    output.append(line).append('\n')
-                    onLine(line)
+            // 读取线程：CLI 派生的守护进程可能继承这条 stdout 管道，使读取端永远等不到 EOF
+            // （旧实现在主流程里 useLines 读到 EOF 才返回，于是 start/stop 之类的操作永不结束，
+            //  上层 busy 一直不释放，表现为“查询无响应、必须重启应用”）。
+            // 现在改为异步读取，主流程以 waitFor() 的进程退出为准，退出后再给一个很短的
+            // 收尾窗口把已缓冲输出取完，之后不再等待管道关闭。
+            val reader = Thread {
+                try {
+                    process.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                        lines.forEach { line ->
+                            synchronized(output) { output.append(line).append('\n') }
+                            onLine(line)
+                        }
+                    }
+                } catch (_: Exception) {
+                    // 进程退出导致管道关闭属正常路径
                 }
             }
+            reader.isDaemon = true
+            reader.start()
             val exit = process.waitFor()
-            CliResult(exitCode = exit, output = output.toString())
+            reader.join(DRAIN_MS)
+            CliResult(exitCode = exit, output = synchronized(output) { output.toString() })
         } catch (e: IOException) {
             throw CliException("执行 CLI 失败：${e.message}")
         } finally {

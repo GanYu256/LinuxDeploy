@@ -1443,6 +1443,15 @@ container_stop()
 # 挂载若已存在，container_start 会跳过，缺失（如 /proc）才补齐。
 container_restart()
 {
+    # 统一命名空间操作：容器运行中（锚点有效）先切入容器 mount ns 再执行 restart。
+    # 必要性（真机实测，2026-09）：触发方可能不在容器所在 ns ——
+    # 那里既看不到已有挂载（is_mounted 误判成未挂载 → 重复挂载）又无法新建挂载
+    # （bind 返回 EINVAL），会把容器重拉成没有 /proc、/dev 的残缺实例，
+    # 用户表现为“挂载都没了、容器没起来”。切入后各步骤都在容器 ns 内完成。
+    if [ "${LD_NSENTER}" != "1" ] && container_nsenter_run restart "$@"; then
+        return 0
+    fi
+
     params_check TARGET_PATH || return 1
 
     msg "正在重启容器（伪重启：结束容器进程后重新拉起，不卸载容器挂载）..."

@@ -56,6 +56,7 @@ import io.github.ganyu256.linuxdeploypro.model.ContainerConfig
 import io.github.ganyu256.linuxdeploypro.ui.theme.ThemeMode
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -292,7 +293,9 @@ fun MainScreen(
             } catch (e: Exception) {
                 error = e.message ?: e.javaClass.simpleName
             }
-            withContext(Dispatchers.Main.immediate) {
+            // 收尾必须执行：即使协程被取消（离开页面、组合被销毁）也要释放 busy，
+            // 否则后续操作全被 busy 互斥挡掉（表现为“查询无响应、需重启应用”）。
+            withContext(NonCancellable + Dispatchers.Main.immediate) {
                 val logHint = logFile?.let { "，日志文件: ${it.absolutePath}" } ?: ""
                 when {
                     timedOut -> {
@@ -435,6 +438,8 @@ fun MainScreen(
                 // 启动/停止即使部分失败也刷新真实状态（CLI start 已容错）
                 refreshOneConfig(cfg.name)
             },
+            // 兜底超时：启停正常在十秒级完成，卡住时强制终止并释放 busy
+            timeoutMs = 10 * 60 * 1000L,
         )
     }
 
@@ -448,6 +453,8 @@ fun MainScreen(
             },
             autoShowLog = true,
             onSuccess = { refreshOneConfig(cfg.name) },
+            // 兜底超时：状态查询正常在秒级返回，卡住时强制收尾，避免 busy 永久占用
+            timeoutMs = 60 * 1000L,
         )
     }
 
