@@ -1436,58 +1436,30 @@ container_stop()
     return ${rc}
 }
 
-# 重启容器（伪重启）：结束容器内全部进程后重新拉起用户空间；不卸载挂载。
+# 重启容器：停止 → 等待 3 秒 → 启动。
 # 用途：容器内 reboot 接管脚本（经 unchroot 在宿主侧调用）与手动 cli.sh restart。
-# 设计：只做“结束进程 + 重新拉起”，不做任何 mount/umount —— 挂载受 mount ns 权限约束
-# （非全局 ns 内 bind 会 EINVAL），而 kill + 重拉完全不需要 mount 系统调用；
-# 挂载若已存在，container_start 会跳过，缺失（如 /proc）才补齐。
+# 设计（2026-09 讨论后定案）：直接复用既有的 stop / start 全流程，不自研“清进程重拉”半套逻辑。
+# 原因是 mount namespace 的生存规则因设备而异：
+#   - k30p 这类是全局挂载：容器挂载在全局 ns 里，清进程不会掉挂载；
+#   - 另一类是独立（每会话）命名空间：容器内进程一旦清空，ns 即被回收，挂载随之消失，
+#     此时重新启动本来就必须重新 mount。
+# 两种形态下 stop + start 都成立，通用不出错；且 stop 会顺带清掉长期运行累积的
+# 挂载叠加层，状态最干净。
+# 命名空间要点：整段（停止 + 重新挂载 + 组件重拉）必须在同一个 ns 内完成，
+# 因此容器运行中先经锚点切入它自己的 ns 再执行（该 ns 正是当初挂载发生的地方，
+# 具备挂载能力）；容器未运行则直接走 start。
 container_restart()
 {
-    # 统一命名空间操作：容器运行中（锚点有效）先切入容器 mount ns 再执行 restart。
-    # 必要性（真机实测，2026-09）：触发方可能不在容器所在 ns ——
-    # 那里既看不到已有挂载（is_mounted 误判成未挂载 → 重复挂载）又无法新建挂载
-    # （bind 返回 EINVAL），会把容器重拉成没有 /proc、/dev 的残缺实例，
-    # 用户表现为“挂载都没了、容器没起来”。切入后各步骤都在容器 ns 内完成。
+    # 统一命名空间操作：锚点有效（容器运行中）先切入容器 mount ns 再执行；未运行则直接启动
     if [ "${LD_NSENTER}" != "1" ] && container_nsenter_run restart "$@"; then
         return 0
     fi
 
     params_check TARGET_PATH || return 1
 
-    msg "正在重启容器（伪重启：结束容器进程后重新拉起，不卸载容器挂载）..."
-    local had_procs=0
-    local pids
-    pids=$(get_pids)
-    if [ -n "${pids}" ]; then
-        had_procs=1
-        msg -n "结束容器进程 ... "
-        kill_pids ${pids}
-        is_ok "失败" "完成"
-        # 复核一轮：等待期间可能 fork 出新的子进程
-        pids=$(get_pids)
-        if [ -n "${pids}" ]; then
-            msg -n "清理残留进程 ... "
-            kill_pids ${pids}
-            is_ok "失败" "完成"
-        fi
-    else
-        msg "容器当前无运行进程。"
-    fi
-
-    # 终止前有进程在运行 → 挂载必然存在（进程就活在这些挂载里），直接跑组件 do_start，
-    # 不做任何挂载动作：既避免 mount/umount（受 mount ns 权限约束的脆弱环节），
-    # 也避免重复挂载在同一路径叠加。
-    # 原本未运行（或挂载已丢）才退回标准 container_start 按需补挂载。
-    if [ "${had_procs}" = "1" ]; then
-        local DO_ACTION='do_start'
-        if [ $# -gt 0 ]; then
-            component_exec "$@" || msg "[警告] 部分组件启动失败（容器已启动，可进入终端检查）"
-        else
-            component_exec "${INCLUDE}" || msg "[警告] 部分组件启动失败（容器已启动，可进入终端检查）"
-        fi
-        return 0
-    fi
-
+    msg "正在重启容器：停止 → 等待 3 秒 → 启动 ..."
+    container_stop "$@" || msg "[警告] 停止阶段有失败项，继续执行启动"
+    sleep 3
     container_start "$@"
     return $?
 }
@@ -2005,7 +1977,7 @@ helper()
 "  deploy [--dry-run] [--yes] [--k=v]  部署 -c 指定配置（含安全护栏与确认）" \
 "  start  [--mount]                启动容器" \
 "  stop   [--umount]               停止容器" \
-"  restart                         重启容器（伪重启：结束进程后重拉，不卸载挂载）" \
+"  restart                         重启容器（停止后重新启动，等价 stop + 3 秒 + start）" \
 "  status                          查看容器状态" \
 "  shell  [-u 用户] [命令]         进入容器（默认 /bin/bash）" \
 "  check                           自检环境与配置" \

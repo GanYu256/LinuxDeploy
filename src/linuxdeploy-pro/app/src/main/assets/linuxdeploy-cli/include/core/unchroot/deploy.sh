@@ -33,8 +33,8 @@ UNCHROOT_EOF
 }
 
 # 接管容器内 poweroff 家族（容器内无关机语义）：
-#   reboot → 伪重启：经 unchroot 到宿主侧执行 cli.sh restart（结束容器进程并重新拉起
-#            用户空间），不卸载挂载、不重启手机。
+#   reboot → 容器重启：经 unchroot 到宿主侧执行 cli.sh restart（等价 stop + 3 秒 + start），
+#            不重启手机。触发侧只负责认准配置名，动作全部交给 CLI 通用逻辑。
 #            注意 Debian 下 /usr/sbin/reboot 是指向 ../bin/systemctl 的软链，必须
 #            “先删链再写脚本”，否则只是改链接目标、等于没接管。
 #   halt/poweroff/shutdown → 统一改为提示并返回失败。原样保留很危险：
@@ -51,8 +51,8 @@ ld_install_reboot_override()
         rm -f "${reboot}"
         cat > "${reboot}" << REBOOT_EOF
 #!/bin/sh
-# Linux Deploy 容器内 reboot：触发容器伪重启（结束容器进程并重新拉起用户空间）。
-# 不卸载挂载、不重启手机；实际动作由宿主侧 CLI 的 restart 子命令完成。
+# Linux Deploy 容器内 reboot：触发容器重启（宿主侧 cli.sh restart = stop + 3 秒 + start）。
+# 不重启手机；容器配置名在部署/启动时已写死，这里不做任何判断。
 if [ ! -x /sbin/unchroot ]; then
     echo "reboot: 缺少 /sbin/unchroot，无法触发容器重启" >&2
     exit 1
@@ -61,7 +61,7 @@ setsid sh /sbin/unchroot /system/bin/sh -c 'exec /system/bin/sh ${ENV_DIR}/cli.s
 exit 0
 REBOOT_EOF
         chmod 755 "${reboot}"
-        msg ":: 已接管容器内 reboot（伪重启 → 宿主侧 cli.sh -c ${CURRENT_CONF} restart）"
+        msg ":: 已接管容器内 reboot（→ 宿主侧 cli.sh -c ${CURRENT_CONF} restart：停止后重新启动）"
     fi
     local tool tool_file
     for tool in halt poweroff shutdown
