@@ -1183,6 +1183,21 @@ def parse_unit(fullname: str) -> SystemctlUnitName: # -> object(prefix, instance
     return SystemctlUnitName(fullname, name, prefix, instance, suffix, component)
 
 def time_to_seconds(text: str, maximum: float) -> float:
+    # 数值解析：整数优先，其次小数（"0.1"、"1.5s" 等）。
+    # 修复（LinuxDeploy-Pro）：原实现只尝试 int()，遇到小数会落入
+    # pow(10, len(val))-1 的启发式回退（len("0.1")=3 → 999），再被 maximum
+    # 截断成 DefaultMaximumTimeout=200 秒。而 DefaultRestartSec=0.1 正是以
+    # "0.1" 字符串形式传入，导致所有未显式声明 RestartSec 的服务重启间隔被
+    # 误算为 200 秒（实测：sshd 被杀后要 3 分 20 秒才被自动拉起）。
+    def number_of(val: str) -> Optional[float]:
+        """ 解析整数或小数，均失败返回 None（交给启发式回退） """
+        try:
+            return int(val)
+        except ValueError:
+            try:
+                return float(val)
+            except ValueError:
+                return None
     value = 0.
     for part in str(text).split(" "):
         item = part.strip()
@@ -1192,42 +1207,33 @@ def time_to_seconds(text: str, maximum: float) -> float:
             val = item[:-1]
             if not val:
                 continue
-            try:
-                value += 60 * int(val)
-            except ValueError:
-                value += 60 * (pow(10, len(val)) -1)
+            num = number_of(val)
+            value += 60 * num if num is not None else 60 * (pow(10, len(val)) -1)
         elif item.endswith("min"):
             val = item[:-3]
             if not val:
                 continue
-            try:
-                value += 60 * int(val)
-            except ValueError:
-                value += 60 * (pow(10, len(val)) -1)
+            num = number_of(val)
+            value += 60 * num if num is not None else 60 * (pow(10, len(val)) -1)
         elif item.endswith("ms"):
             val = item[:-2]
             if not val:
                 continue
-            try:
-                value += int(val) / 1000.
-            except ValueError:
-                pass
+            num = number_of(val)
+            if num is not None:
+                value += num / 1000.
         elif item.endswith("s"):
             val = item[:-1]
             if not val:
                 continue
-            try:
-                value += int(val)
-            except ValueError:
-                value += (pow(10, len(val)) -1)
+            num = number_of(val)
+            value += num if num is not None else (pow(10, len(val)) -1)
         else:
             val = item
             if not val:
                 continue
-            try:
-                value += int(val)
-            except ValueError:
-                value += (pow(10, len(val)) -1)
+            num = number_of(val)
+            value += num if num is not None else (pow(10, len(val)) -1)
     if value > maximum:
         return maximum
     if not value and text.strip() == "0":

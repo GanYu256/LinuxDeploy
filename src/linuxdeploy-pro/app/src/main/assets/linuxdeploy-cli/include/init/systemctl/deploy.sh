@@ -30,7 +30,11 @@ do_install()
     msg ":: 正在安装 ${COMPONENT} ... "
     local src="${INCLUDE_DIR}/init/systemctl/systemctl.py"
     if [ -f "${src}" ]; then
-        make_dirs /usr/bin /run/systemctl
+        # 修复：make_dirs 不会自动补 CHROOT_DIR 前缀，必须写容器内路径的宿主全路径。
+        # 原写法会把目录建到 Android 宿主根（宿主无 /run，静默失败），
+        # 导致容器内 /run/systemctl 不存在 → init 的 pid 文件写入失败
+        # （实测日志：cannot create /run/systemctl/pid: Directory nonexistent）。
+        make_dirs "${CHROOT_DIR}/usr/bin" "${CHROOT_DIR}/run/systemctl"
         cp -f "${src}" "${CHROOT_DIR}/usr/bin/systemctl"
         chmod 755 "${CHROOT_DIR}/usr/bin/systemctl"
         is_ok "失败" "完成"
@@ -49,11 +53,24 @@ do_start()
     fi
     msg -n ":: 启动 ${COMPONENT} ... "
     [ -x "${CHROOT_DIR}/usr/bin/systemctl" ] || { msg "失败（/usr/bin/systemctl 未安装，请重新部署）"; return 1; }
-    make_dirs /run/systemctl
+    # 修复：同上，pid 目录必须落在容器内，init 才能成功写 /run/systemctl/pid
+    # （systemctl_running()/do_stop 都依赖该文件，缺失会导致重复拉起 init）
+    make_dirs "${CHROOT_DIR}/run/systemctl"
     # 拉起 init 前确保 ssh.service 已 enable：systemctl 的 default.target 才会
     # 启动 sshd（openssh 安装时未必 enable；此处兜底覆盖任何顺序/老容器）
     if [ -e "${CHROOT_DIR}/usr/lib/systemd/system/ssh.service" ] || [ -e "${CHROOT_DIR}/lib/systemd/system/ssh.service" ]; then
         chroot_exec /usr/bin/systemctl enable ssh.service 2>/dev/null || true
+        # 兜底加固：给 ssh.service 写 RestartSec=1s 的 drop-in。
+        # 原因：未显式声明 RestartSec 时走 DefaultRestartSec="0.1"，旧版
+        # time_to_seconds 会把小数误解析成 200 秒上限，sshd 崩溃后要等 3 分 20 秒
+        # 才被拉起；显式写整数秒（带 s 后缀）可绕开该解析路径，并让 init 循环
+        # 间隔自动降到 1 秒（restartSec>0.9 且 <loop_sleep 时自动收紧），
+        # 使崩溃恢复延迟进入 1~2 秒级。每次启动幂等重写，防 apt 升级/旧容器缺失。
+        make_dirs "${CHROOT_DIR}/etc/systemd/system/ssh.service.d"
+        cat > "${CHROOT_DIR}/etc/systemd/system/ssh.service.d/restartsec.conf" <<RESTARTSEC
+[Service]
+RestartSec=1s
+RESTARTSEC
     fi
     # 以 init 服务方式拉起并常驻：setsid 脱离宿主会话；--init 进入 init 模式
     # （拉起 default.target 服务 → 阻塞 init 循环收僵尸、等 SIGTERM/SIGINT 干净停机）。
