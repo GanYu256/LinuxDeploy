@@ -30,7 +30,7 @@ object CliManager {
     private const val ASSET_ROOT = "linuxdeploy-cli"
 
     /** 解压标记：改动此值可强制重新解压（升级 CLI 时用） */
-    private const val EXTRACT_MARKER = "4.1.18"
+    private const val EXTRACT_MARKER = "4.1.19"
 
     /** CLI 版本（与 cli.sh 内 VERSION 对应，仅用于日志显示） */
     const val CLI_VERSION = "4.0"

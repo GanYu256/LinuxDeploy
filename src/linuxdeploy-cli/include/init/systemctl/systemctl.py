@@ -1147,11 +1147,25 @@ def must_have_failed(waitpid: SystemctlWaitPID, cmd: List[str]) -> SystemctlWait
             waitpid = SystemctlWaitPID(waitpid.pid, 11, waitpid.signal)
     return waitpid
 
+# 【性能补丁】正在被 subprocess_waitpid / subprocess_testpid 显式等待的 pid 集合。
+# 背景：init 循环里的 reap_zombies() 回收僵尸时若做无差别回收，可能抢走这两个函数
+# 要的退出码（它们对 os.waitpid 没有 ECHILD 容错）。故 reap_zombies() 先用
+# waitid(WNOWAIT) 只窥视不摘取，命中本集合的 pid 一律让给等待方自己收。
+_waiting_pids: set = set()
+
 def subprocess_waitpid(pid: int) -> SystemctlWaitPID:
-    run_pid, run_stat = os.waitpid(pid, 0)
+    _waiting_pids.add(pid)
+    try:
+        run_pid, run_stat = os.waitpid(pid, 0)
+    finally:
+        _waiting_pids.discard(pid)
     return SystemctlWaitPID(run_pid, os.WEXITSTATUS(run_stat), os.WTERMSIG(run_stat))
 def subprocess_testpid(pid: int) -> SystemctlWaitPID:
-    run_pid, run_stat = os.waitpid(pid, os.WNOHANG)
+    _waiting_pids.add(pid)
+    try:
+        run_pid, run_stat = os.waitpid(pid, os.WNOHANG)
+    finally:
+        _waiting_pids.discard(pid)
     if run_pid:
         return SystemctlWaitPID(run_pid, os.WEXITSTATUS(run_stat), os.WTERMSIG(run_stat))
     else:
@@ -6843,6 +6857,37 @@ class Systemctl:
         return F"remaining {running} process"
     def reap_zombies(self) -> int:
         """ check to reap children """
+        # 【性能】原实现每轮循环把整机所有 /proc/<pid>/status 全部打开并跑两条正则，
+        # 只为两件事：①回收本进程的僵尸子进程 ②统计存活进程数。Android 是共享 PID
+        # 命名空间，容器内可见全机进程（实测 902 个）→ 每轮 1806 次系统调用、
+        # 0.116 秒 CPU；当 ssh.service 的 RestartSec=1s 把 loop_sleep 从 5 秒压到
+        # 1 秒后，常驻 CPU 高达 13%（两台容器各 13%）。现改为：
+        #   - 回收僵尸：waitid(WNOWAIT) 只窥视 + waitpid 精确回收，复杂度与僵尸数相关，
+        #     不再扫描整机 /proc；
+        #   - 统计进程数：该返回值只在 EXIT_NO_PROCS_LEFT 模式下被用到（裸 --init 时
+        #     exit_mode 为 0，见 init_loop_until_stop），此模式下才做扫描。
+        deferred: set = set()
+        while True:
+            try:
+                info = os.waitid(os.P_ALL, 0, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            except ChildProcessError:
+                break # 已经没有子进程
+            if info is None:
+                break # 没有已退出的子进程
+            pid = info.si_pid
+            if pid in deferred:
+                break # 剩下的都是让给等待方的，不再纠缠
+            if pid in _waiting_pids:
+                deferred.add(pid) # 交给 subprocess_waitpid/testpid，别抢退出码
+                continue
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except OSError as e:
+                logg.warning("reap zombie %s: %s", pid, e.strerror)
+                break
+            logg.info("reap zombie %s", pid)
+        if not self.exit_mode & EXIT_NO_PROCS_LEFT:
+            return 0
         selfpid = os.getpid()
         running = 0
         for pid_entry in os.listdir(_proc_pid_dir):
@@ -6852,26 +6897,6 @@ class Systemctl:
             if pid == selfpid:
                 continue
             proc_status = _proc_pid_status.format(**locals())
-            if os.path.isfile(proc_status):
-                zombie = False
-                ppid = -1
-                try:
-                    with open(proc_status) as f:
-                        for line in f:
-                            m = re.match(r"State:\s*Z.*", line)
-                            if m:
-                                zombie = True
-                            m = re.match(r"PPid:\s*(\d+)", line)
-                            if m:
-                                ppid = int(m.group(1))
-                except IOError as e:
-                    logg.warning("%s >> %s", proc_status, e)
-                    continue
-                if zombie and ppid == os.getpid():
-                    logg.info("reap zombie %s", pid)
-                    try: os.waitpid(pid, os.WNOHANG)
-                    except OSError as e:
-                        logg.warning("reap zombie %s: %s", pid, e.strerror)
             if os.path.isfile(proc_status):
                 if pid > 1:
                     running += 1
